@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildVerificationUri, extractAuthCode } from "../src/lib/trae-oauth.js";
+import {
+  buildVerificationUri,
+  extractAuthCode,
+  TraeOAuthManager,
+} from "../src/lib/trae-oauth.js";
 
 const context = {
   pluginVersion: "2.3.83557",
@@ -77,4 +81,21 @@ test("expired authCodeInfo is rejected", () => {
       ),
     /expired/,
   );
+});
+
+test("OAuth manager reports pending and exchanging sessions as active", () => {
+  const manager = new TraeOAuthManager({
+    accountStore: {},
+    storagePath: "",
+    exePath: "",
+  });
+  assert.equal(manager.isActive(), false);
+  manager.sessions.set("pending", { status: "pending" });
+  assert.equal(manager.isActive(), true);
+  manager.sessions.set("pending", { status: "complete" });
+  manager.sessions.set("exchanging", { status: "exchanging" });
+  assert.equal(manager.isActive(), true);
+  manager.sessions.clear();
+  manager.sessions.set("done", { status: "complete" });
+  assert.equal(manager.isActive(), false);
 });

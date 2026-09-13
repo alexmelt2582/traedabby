@@ -53,6 +53,7 @@ const MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024;
 const accountStore = new AccountStore(DATA_DIR);
 let cdpConnected = false;
 let switchInFlight = null;
+let loginStartInFlight = null;
 
 async function getApiToken() {
   const existing = await readTextFile(API_TOKEN_PATH, { required: false });
@@ -290,8 +291,24 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
       jsonResponse(response, 409, { ok: false, error: "An account switch is already running" });
       return;
     }
-    const result = await fakeLogoutManager.start();
-    jsonResponse(response, 200, { ok: true, ...result });
+    if (loginStartInFlight) {
+      jsonResponse(response, 409, { ok: false, error: "A login flow is already starting" });
+      return;
+    }
+    if (oauthManager.isActive()) {
+      jsonResponse(response, 409, {
+        ok: false,
+        error: "A seamless login flow is already running",
+      });
+      return;
+    }
+    loginStartInFlight = fakeLogoutManager.start();
+    try {
+      const result = await loginStartInFlight;
+      jsonResponse(response, 200, { ok: true, ...result });
+    } finally {
+      loginStartInFlight = null;
+    }
     return;
   }
 
@@ -326,8 +343,17 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
       });
       return;
     }
-    const result = await oauthManager.start();
-    jsonResponse(response, 200, { ok: true, ...result });
+    if (loginStartInFlight) {
+      jsonResponse(response, 409, { ok: false, error: "A login flow is already starting" });
+      return;
+    }
+    loginStartInFlight = oauthManager.start();
+    try {
+      const result = await loginStartInFlight;
+      jsonResponse(response, 200, { ok: true, ...result });
+    } finally {
+      loginStartInFlight = null;
+    }
     return;
   }
 

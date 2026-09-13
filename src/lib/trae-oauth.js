@@ -602,6 +602,12 @@ export class TraeOAuthManager {
     };
   }
 
+  isActive() {
+    return [...this.sessions.values()].some(
+      (session) => session.status === "pending" || session.status === "exchanging",
+    );
+  }
+
   cancel(loginId) {
     const session = this.sessions.get(loginId);
     if (!session) return false;
