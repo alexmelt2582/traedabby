@@ -261,6 +261,25 @@ export async function refreshAuthSnapshot(snapshot) {
   };
 }
 
+export async function refreshAccountKeepalive(snapshot) {
+  const refreshed = await refreshAuthSnapshot(snapshot);
+  let insights = null;
+  let insightsError = null;
+  try {
+    insights = await fetchTraeAccountInsights(refreshed.snapshot);
+  } catch (error) {
+    insightsError = error.message || String(error);
+  }
+  return {
+    snapshot: refreshed.snapshot,
+    auth: refreshed.auth,
+    profile: refreshed.profile,
+    insights,
+    insightsError,
+    refreshedToken: true,
+  };
+}
+
 export async function refreshAccountInsights(snapshot) {
   try {
     return {

@@ -27,6 +27,11 @@ and keeps all account data on the local machine.
   share one machine-generated device id across accounts.
 - Check-in endpoints are served from `https://api.trae.cn`; do not substitute the
   account-specific `loginHost`.
+- Keep-alive may rotate credentials only for inactive accounts. The active account
+  must be synchronized from the running TRAE storage and must not have its refresh
+  token rotated directly from the backup.
+- Skip automatic keep-alive while Cockpit Tools is running. Both tools rotating the
+  same refresh tokens can invalidate each other.
 
 ## Safety
 

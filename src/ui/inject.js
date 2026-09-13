@@ -406,6 +406,7 @@
     #${ROOT_ID} .te-meta-row {
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
       gap: 13px;
       min-width: 0;
       margin-top: 8px;
@@ -437,11 +438,23 @@
       color: #22a06b;
     }
 
+    #${ROOT_ID} .te-keepalive-state.checked {
+      color: #22a06b;
+    }
+
     #${ROOT_ID} .te-checkin-state.error {
       color: #ef4444;
     }
 
+    #${ROOT_ID} .te-keepalive-state.error {
+      color: #ef4444;
+    }
+
     #${ROOT_ID} .te-checkin-state.pending {
+      color: var(--te-muted);
+    }
+
+    #${ROOT_ID} .te-keepalive-state.pending {
       color: var(--te-muted);
     }
 
@@ -887,6 +900,10 @@
         </div>
         <div class="te-feature">
           <span class="te-feature-icon">6</span>
+          <span><span class="te-feature-title">自动保活</span><span class="te-feature-desc">为非当前账号定期刷新登录凭据和额度。</span></span>
+        </div>
+        <div class="te-feature">
+          <span class="te-feature-icon">7</span>
           <span><span class="te-feature-title">安全恢复</span><span class="te-feature-desc">切换或登录中断时自动恢复原账号。</span></span>
         </div>
       </div>
@@ -1096,6 +1113,39 @@
     };
   }
 
+  function accountKeepaliveView(account, currentAccountId) {
+    const keepalive = account.keepalive;
+    if (keepalive?.status === "error") {
+      return {
+        label: "失败",
+        state: "error",
+        title: keepalive.error || "账号保活失败",
+      };
+    }
+    if (account.id === currentAccountId) {
+      return {
+        label: "运行中",
+        state: "checked",
+        title: "当前账号由正在运行的 TRAE 会话维护",
+      };
+    }
+    if (keepalive?.updatedAt) {
+      const details = [`最近保活 ${formatTime(keepalive.updatedAt)}`];
+      if (keepalive.tokenRefreshed) details.push("登录凭据已刷新");
+      if (keepalive.warning) details.push("额度同步有警告");
+      return {
+        label: "正常",
+        state: "checked",
+        title: details.join("，"),
+      };
+    }
+    return {
+      label: "待保活",
+      state: "pending",
+      title: "等待后台自动保活",
+    };
+  }
+
   function accountCreditView(account) {
     const insights = account.insights;
     if (!insights) {
@@ -1210,7 +1260,15 @@
       checkinValue.textContent = checkinView.label;
       checkinValue.classList.add(checkinView.state);
       checkinValue.title = checkinView.title || "";
-      meta.append(phone, plan, checkin);
+      const keepaliveView = accountKeepaliveView(account, currentAccountId);
+      const keepalive = document.createElement("span");
+      keepalive.className = "te-meta-item";
+      keepalive.innerHTML = '<span class="te-meta-label">保活</span><span class="te-meta-value te-keepalive-state"></span>';
+      const keepaliveValue = keepalive.querySelector(".te-keepalive-state");
+      keepaliveValue.textContent = keepaliveView.label;
+      keepaliveValue.classList.add(keepaliveView.state);
+      keepaliveValue.title = keepaliveView.title || "";
+      meta.append(phone, plan, checkin, keepalive);
 
       const credit = document.createElement("div");
       credit.className = "te-credit-block";

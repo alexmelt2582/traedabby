@@ -172,3 +172,27 @@ test("account check-in metadata is exposed without touching snapshots", async ()
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 });
+
+test("account keepalive metadata is exposed without touching snapshots", async () => {
+  const dataDir = await tempDir();
+  try {
+    const store = new AccountStore(dataDir);
+    const saved = await store.backupCurrent(storageFixture(), { now: 100 });
+    const updated = await store.saveKeepalive(
+      saved.account.id,
+      {
+        status: "ok",
+        tokenRefreshed: true,
+        insightsUpdated: true,
+        updatedAt: "2026-09-14T00:00:00.000Z",
+      },
+      { now: 200 },
+    );
+    assert.equal(updated.keepalive.status, "ok");
+    assert.equal(updated.keepalive.tokenRefreshed, true);
+    const snapshot = await store.readSnapshot(saved.account.id);
+    assert.equal(Object.hasOwn(snapshot, "keepalive"), false);
+  } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});

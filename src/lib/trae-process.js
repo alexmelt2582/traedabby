@@ -101,6 +101,23 @@ export async function findTraeProcessIds(exePath) {
   return (Array.isArray(parsed) ? parsed : [parsed]).map(Number).filter(Number.isInteger);
 }
 
+export async function isCockpitRunning() {
+  const script = `
+    $names = @('Cockpit Tools', 'cockpit-tools', 'antigravity_cockpit_tools', 'antigravity-cockpit-tools')
+    $items = @(Get-Process -Name $names -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
+    if (-not $items.Count) {
+      $items = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -and [System.IO.Path]::GetFileNameWithoutExtension($_.Path) -match '^(?i:Cockpit Tools|cockpit-tools)$'
+      } | Select-Object -ExpandProperty Id)
+    }
+    $items | ConvertTo-Json -Compress
+  `;
+  const output = await runPowerShell(script);
+  if (!output) return false;
+  const parsed = JSON.parse(output);
+  return (Array.isArray(parsed) ? parsed : [parsed]).some(Number.isInteger);
+}
+
 async function waitForExit(processIds, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   const remaining = new Set(processIds);

@@ -21,6 +21,10 @@ The account suite also supports:
 - automatic daily check-in for every saved account. Check-in uses each account's own
   stable user id as its request device id, so one account does not consume another
   account's daily check-in slot.
+- automatic account keep-alive. Inactive accounts refresh their login credentials and
+  usage every six hours; the active account is synchronized from the running TRAE
+  session instead of rotating its refresh token. Keep-alive is skipped while Cockpit
+  Tools is running to avoid conflicting token rotations.
 
 Authentication backups are stored locally under `data/accounts`. Only account-scoped
 `iCube*` keys are replaced or cleared; workspaces, settings, extensions, and window

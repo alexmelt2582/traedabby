@@ -28,13 +28,22 @@ import {
   fetchCheckinStatus,
   resolveCheckinReward,
 } from "./lib/trae-checkin.js";
+import { fetchTraeAccountInsights } from "./lib/trae-insights.js";
+import {
+  DEFAULT_KEEPALIVE_INTERVAL_MS,
+  DEFAULT_KEEPALIVE_RETRY_INTERVAL_MS,
+  isKeepaliveDue,
+  parseDuration,
+} from "./lib/trae-keepalive.js";
 import { TraeFakeLogoutManager } from "./lib/trae-fake-logout.js";
 import {
+  refreshAccountKeepalive,
   refreshAccountInsights,
   refreshAuthSnapshot,
 } from "./lib/trae-refresh.js";
 import {
   findTraeProcessIds,
+  isCockpitRunning,
   startTraeWithCdp,
   stopTraeForRestart,
   traeExecutableExists,
@@ -58,6 +67,19 @@ const LEGACY_TRANSACTION_DIR = path.join(DATA_DIR, "transactions");
 const FAKE_LOGOUT_SESSION_PATH = path.join(DATA_DIR, "fake-logout", "session.json");
 const MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024;
 const AUTO_CHECKIN_INTERVAL_MS = 30 * 60 * 1000;
+const AUTO_KEEPALIVE_ENABLED = process.env.TRAE_ENHANCER_AUTO_KEEPALIVE !== "0";
+const AUTO_KEEPALIVE_INTERVAL_MS = parseDuration(
+  process.env.TRAE_ENHANCER_KEEPALIVE_INTERVAL_MS,
+  DEFAULT_KEEPALIVE_INTERVAL_MS,
+);
+const AUTO_KEEPALIVE_RETRY_INTERVAL_MS = parseDuration(
+  process.env.TRAE_ENHANCER_KEEPALIVE_RETRY_INTERVAL_MS,
+  DEFAULT_KEEPALIVE_RETRY_INTERVAL_MS,
+);
+const AUTO_KEEPALIVE_SWEEP_INTERVAL_MS = parseDuration(
+  process.env.TRAE_ENHANCER_KEEPALIVE_SWEEP_INTERVAL_MS,
+  30 * 60 * 1000,
+);
 
 const accountStore = new AccountStore(DATA_DIR);
 let cdpConnected = false;
@@ -65,6 +87,7 @@ let switchInFlight = null;
 let loginStartInFlight = null;
 let insightsRefreshInFlight = null;
 let checkinInFlight = null;
+let keepaliveInFlight = null;
 
 async function getApiToken() {
   const existing = await readTextFile(API_TOKEN_PATH, { required: false });
@@ -348,6 +371,167 @@ async function runAccountCheckin(accountIds = null, { force = false, reason = "m
   }
 }
 
+async function keepaliveOneAccount(account, { reason = "scheduled" } = {}) {
+  try {
+    const snapshot = await accountStore.readSnapshot(account.id);
+    const refreshed = await refreshAccountKeepalive(snapshot);
+    await accountStore.saveSnapshot(account.id, refreshed.snapshot);
+    if (refreshed.insights) {
+      await accountStore.saveInsights(account.id, refreshed.insights);
+    }
+    const warning = refreshed.insightsError || refreshed.insights?.error || null;
+    const saved = await accountStore.saveKeepalive(account.id, {
+      status: "ok",
+      reason,
+      tokenRefreshed: true,
+      insightsUpdated: !!refreshed.insights,
+      warning,
+      error: null,
+      updatedAt: new Date().toISOString(),
+    });
+    return {
+      id: account.id,
+      ok: true,
+      skipped: false,
+      refreshedToken: true,
+      insightsUpdated: !!refreshed.insights,
+      warning,
+      account: saved,
+    };
+  } catch (error) {
+    const message = error.message || String(error);
+    const saved = await accountStore.saveKeepalive(account.id, {
+      ...(account.keepalive || {}),
+      status: "error",
+      reason,
+      tokenRefreshed: false,
+      insightsUpdated: false,
+      warning: null,
+      error: message,
+      updatedAt: new Date().toISOString(),
+    });
+    return { id: account.id, ok: false, error: message, account: saved };
+  }
+}
+
+async function keepaliveActiveAccount(
+  account,
+  storageRoot,
+  { reason = "scheduled" } = {},
+) {
+  try {
+    await accountStore.backupCurrent(storageRoot, { now: Date.now() });
+    const snapshot = await accountStore.readSnapshot(account.id);
+    let insights = null;
+    let warning = null;
+    try {
+      insights = await fetchTraeAccountInsights(snapshot);
+    } catch (error) {
+      warning = error.message || String(error);
+    }
+    if (insights) await accountStore.saveInsights(account.id, insights);
+    const saved = await accountStore.saveKeepalive(account.id, {
+      status: "ok",
+      reason,
+      tokenRefreshed: false,
+      syncedFromLive: true,
+      insightsUpdated: !!insights,
+      warning,
+      error: null,
+      updatedAt: new Date().toISOString(),
+    });
+    return {
+      id: account.id,
+      ok: true,
+      skipped: false,
+      activeAccount: true,
+      tokenRefreshed: false,
+      syncedFromLive: true,
+      insightsUpdated: !!insights,
+      warning,
+      account: saved,
+    };
+  } catch (error) {
+    const message = error.message || String(error);
+    const saved = await accountStore.saveKeepalive(account.id, {
+      ...(account.keepalive || {}),
+      status: "error",
+      reason,
+      tokenRefreshed: false,
+      syncedFromLive: false,
+      insightsUpdated: false,
+      warning: null,
+      error: message,
+      updatedAt: new Date().toISOString(),
+    });
+    return { id: account.id, ok: false, activeAccount: true, error: message, account: saved };
+  }
+}
+
+async function runAccountKeepalive(
+  accountIds = null,
+  { force = false, reason = "manual" } = {},
+) {
+  if (keepaliveInFlight) throw new Error("Account keepalive is already running");
+  keepaliveInFlight = (async () => {
+    const accounts = await accountStore.list();
+    const requested = accountIds ? new Set(accountIds.map(String)) : null;
+    const selected = requested
+      ? accounts.filter((account) => requested.has(account.id))
+      : accounts;
+    if (requested && selected.length !== requested.size) {
+      throw new Error("One or more selected account backups were not found");
+    }
+    if (!selected.length) throw new Error("没有可保活的账号");
+
+    let currentAccountId = null;
+    let storageRoot = null;
+    try {
+      storageRoot = await readJsonFile(STORAGE_PATH);
+      currentAccountId = await accountStore.resolveCurrentAccountId(storageRoot);
+    } catch {
+      currentAccountId = null;
+    }
+
+    const now = Date.now();
+    const results = [];
+    for (const account of selected) {
+      if (
+        !force &&
+        !isKeepaliveDue(account, {
+          now,
+          intervalMs: AUTO_KEEPALIVE_INTERVAL_MS,
+          retryIntervalMs: AUTO_KEEPALIVE_RETRY_INTERVAL_MS,
+        })
+      ) {
+        results.push({ id: account.id, ok: true, skipped: true, reason: "not_due" });
+        continue;
+      }
+      if (account.id === currentAccountId) {
+        results.push(
+          await keepaliveActiveAccount(account, storageRoot, { reason }),
+        );
+        continue;
+      }
+      results.push(await keepaliveOneAccount(account, { reason }));
+      if (selected.length > 1) await delay(500);
+    }
+
+    return {
+      total: selected.length,
+      refreshed: results.filter((result) => result.ok && !result.skipped).length,
+      skipped: results.filter((result) => result.ok && result.skipped).length,
+      failed: results.filter((result) => !result.ok).length,
+      results,
+    };
+  })();
+  try {
+    return await keepaliveInFlight;
+  } finally {
+    keepaliveInFlight = null;
+  }
+}
+
 async function route(request, response, apiToken, cdpClient, oauthManager, fakeLogoutManager) {
   const requestUrl = new URL(request.url || "/", `http://${LOOPBACK_HOST}:${UI_PORT}`);
   const pathname = requestUrl.pathname;
@@ -373,6 +557,8 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
       cdpPort: CDP_PORT,
       cdpConnected,
       accountCount: accounts.length,
+      keepaliveEnabled: AUTO_KEEPALIVE_ENABLED,
+      keepaliveIntervalMs: AUTO_KEEPALIVE_INTERVAL_MS,
     });
     return;
   }
@@ -447,6 +633,10 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
       jsonResponse(response, 409, { ok: false, error: "Account check-in is already running" });
       return;
     }
+    if (keepaliveInFlight) {
+      jsonResponse(response, 409, { ok: false, error: "Account keepalive is already running" });
+      return;
+    }
     if (fakeLogoutManager.isActive()) {
       jsonResponse(response, 409, {
         ok: false,
@@ -479,6 +669,10 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
     }
     if (checkinInFlight) {
       jsonResponse(response, 409, { ok: false, error: "Account check-in is already running" });
+      return;
+    }
+    if (keepaliveInFlight) {
+      jsonResponse(response, 409, { ok: false, error: "Account keepalive is already running" });
       return;
     }
     if (loginStartInFlight) {
@@ -515,6 +709,60 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
     return;
   }
 
+  if (request.method === "POST" && pathname === "/api/accounts/keepalive/run") {
+    if (switchInFlight) {
+      jsonResponse(response, 409, { ok: false, error: "An account switch is already running" });
+      return;
+    }
+    if (checkinInFlight) {
+      jsonResponse(response, 409, { ok: false, error: "Account check-in is already running" });
+      return;
+    }
+    if (loginStartInFlight) {
+      jsonResponse(response, 409, { ok: false, error: "A login flow is already starting" });
+      return;
+    }
+    if (oauthManager.isActive()) {
+      jsonResponse(response, 409, {
+        ok: false,
+        error: "A seamless login flow is already running",
+      });
+      return;
+    }
+    if (fakeLogoutManager.isActive()) {
+      jsonResponse(response, 409, {
+        ok: false,
+        error: "A fake logout login flow is already running",
+      });
+      return;
+    }
+    if (insightsRefreshInFlight) {
+      jsonResponse(response, 409, { ok: false, error: "Account insights are already refreshing" });
+      return;
+    }
+    if (keepaliveInFlight) {
+      jsonResponse(response, 409, { ok: false, error: "Account keepalive is already running" });
+      return;
+    }
+    if (await isCockpitRunning()) {
+      jsonResponse(response, 409, {
+        ok: false,
+        error: "Cockpit Tools is running; keepalive was skipped to avoid token rotation conflicts",
+      });
+      return;
+    }
+    const body = await readRequestBody(request);
+    const accountIds = Array.isArray(body.accountIds)
+      ? body.accountIds.map((value) => String(value || "").trim()).filter(Boolean)
+      : null;
+    const result = await runAccountKeepalive(accountIds, {
+      force: body.force === true,
+      reason: "manual",
+    });
+    jsonResponse(response, 200, { ok: true, ...result });
+    return;
+  }
+
   if (request.method === "POST" && pathname === "/api/accounts/switch") {
     if (switchInFlight) {
       jsonResponse(response, 409, { ok: false, error: "An account switch is already running" });
@@ -522,6 +770,10 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
     }
     if (checkinInFlight) {
       jsonResponse(response, 409, { ok: false, error: "Account check-in is already running" });
+      return;
+    }
+    if (keepaliveInFlight) {
+      jsonResponse(response, 409, { ok: false, error: "Account keepalive is already running" });
       return;
     }
     if (fakeLogoutManager.isActive()) {
@@ -549,6 +801,10 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
     }
     if (checkinInFlight) {
       jsonResponse(response, 409, { ok: false, error: "Account check-in is already running" });
+      return;
+    }
+    if (keepaliveInFlight) {
+      jsonResponse(response, 409, { ok: false, error: "Account keepalive is already running" });
       return;
     }
     if (loginStartInFlight) {
@@ -598,6 +854,10 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
   if (request.method === "POST" && pathname === "/api/oauth/start") {
     if (checkinInFlight) {
       jsonResponse(response, 409, { ok: false, error: "Account check-in is already running" });
+      return;
+    }
+    if (keepaliveInFlight) {
+      jsonResponse(response, 409, { ok: false, error: "Account keepalive is already running" });
       return;
     }
     if (fakeLogoutManager.isActive()) {
@@ -732,11 +992,16 @@ async function main() {
         oauthManager.isActive() ||
         fakeLogoutManager.isActive() ||
         insightsRefreshInFlight ||
-        checkinInFlight
+        checkinInFlight ||
+        keepaliveInFlight
       ) {
         return;
       }
       try {
+        if (await isCockpitRunning()) {
+          console.log("[checkin] skipped because Cockpit Tools is running");
+          return;
+        }
         const result = await runAccountCheckin(null, {
           force: false,
           reason: "scheduled",
@@ -754,9 +1019,51 @@ async function main() {
     autoCheckinTimer.unref?.();
   }
 
+  let autoKeepaliveTimer = null;
+  let autoKeepaliveStartTimer = null;
+  if (AUTO_KEEPALIVE_ENABLED) {
+    const runScheduledKeepalive = async () => {
+      if (
+        switchInFlight ||
+        loginStartInFlight ||
+        oauthManager.isActive() ||
+        fakeLogoutManager.isActive() ||
+        insightsRefreshInFlight ||
+        checkinInFlight ||
+        keepaliveInFlight
+      ) {
+        return;
+      }
+      try {
+        if (await isCockpitRunning()) {
+          console.log("[keepalive] skipped because Cockpit Tools is running");
+          return;
+        }
+        const result = await runAccountKeepalive(null, {
+          force: false,
+          reason: "scheduled",
+        });
+        console.log(
+          `[keepalive] refreshed=${result.refreshed} skipped=${result.skipped} failed=${result.failed}`,
+        );
+      } catch (error) {
+        console.error(`[keepalive] scheduled run failed: ${error.message || error}`);
+      }
+    };
+    autoKeepaliveStartTimer = setTimeout(runScheduledKeepalive, 20_000);
+    autoKeepaliveStartTimer.unref?.();
+    autoKeepaliveTimer = setInterval(
+      runScheduledKeepalive,
+      AUTO_KEEPALIVE_SWEEP_INTERVAL_MS,
+    );
+    autoKeepaliveTimer.unref?.();
+  }
+
   async function shutdown() {
     clearTimeout(autoCheckinStartTimer);
     clearInterval(autoCheckinTimer);
+    clearTimeout(autoKeepaliveStartTimer);
+    clearInterval(autoKeepaliveTimer);
     cdpClient.stop().catch(() => {});
     await new Promise((resolve) => server.close(resolve));
     process.exit(0);

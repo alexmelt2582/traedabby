@@ -49,6 +49,7 @@ function publicAccount(record) {
     nickname: record.nickname,
     insights: record.insights || null,
     checkin: record.checkin || null,
+    keepalive: record.keepalive || null,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     snapshotCapturedAt: record.snapshotCapturedAt,
@@ -70,6 +71,7 @@ function buildAccountRecord(identity, existing, snapshot, now) {
     displayName: safeDisplayName(identity),
     insights: existing?.insights || null,
     checkin: existing?.checkin || null,
+    keepalive: existing?.keepalive || null,
     createdAt: existing?.createdAt || now,
     updatedAt: now,
     snapshotCapturedAt: Number.isFinite(Number(snapshot.capturedAt))
@@ -256,6 +258,21 @@ export class AccountStore {
       checkin: {
         ...(checkin || {}),
         updatedAt: (checkin || {}).updatedAt || new Date(now).toISOString(),
+      },
+    };
+    await writeJsonAtomic(this.indexPath, index, { mode: 0o600 });
+    return publicAccount(index.accounts[position]);
+  }
+
+  async saveKeepalive(accountId, keepalive, { now = Date.now() } = {}) {
+    const index = await this.readIndex();
+    const position = index.accounts.findIndex((record) => record.id === accountId);
+    if (position < 0) throw new Error("Account backup was not found");
+    index.accounts[position] = {
+      ...index.accounts[position],
+      keepalive: {
+        ...(keepalive || {}),
+        updatedAt: (keepalive || {}).updatedAt || new Date(now).toISOString(),
       },
     };
     await writeJsonAtomic(this.indexPath, index, { mode: 0o600 });
