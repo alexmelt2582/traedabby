@@ -157,11 +157,12 @@
     }
 
     #${ROOT_ID} .te-secondary {
-      margin-left: auto;
       color: var(--te-text);
       border-color: var(--te-border);
       background: var(--te-surface);
     }
+
+    #${ROOT_ID} .te-refresh { margin-left: auto; }
 
     #${ROOT_ID} .te-primary:hover,
     #${ROOT_ID} .te-secondary:hover { filter: brightness(1.06); }
@@ -278,6 +279,50 @@
       transform: translateY(0);
     }
 
+    #${ROOT_ID} .te-modal-mask {
+      position: fixed;
+      inset: 0;
+      z-index: 2147483647;
+      display: none;
+      place-items: center;
+      padding: 16px;
+      background: rgba(0,0,0,.38);
+      backdrop-filter: blur(3px);
+      -webkit-backdrop-filter: blur(3px);
+    }
+
+    #${ROOT_ID} .te-modal-mask.open { display: grid; }
+
+    #${ROOT_ID} .te-modal {
+      width: min(360px, calc(100vw - 32px));
+      padding: 18px;
+      border: 1px solid var(--te-border);
+      border-radius: 12px;
+      color: var(--te-text);
+      background: var(--te-panel-solid);
+      box-shadow: 0 22px 70px rgba(0,0,0,.38);
+    }
+
+    #${ROOT_ID} .te-modal-title {
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    #${ROOT_ID} .te-modal-status {
+      min-height: 42px;
+      margin-top: 10px;
+      color: var(--te-muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    #${ROOT_ID} .te-modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
     #${ROOT_ID} .te-spinner {
       width: 13px;
       height: 13px;
@@ -329,6 +374,13 @@
       </svg>
       <span>备份当前账号</span>
     </button>
+    <button class="te-secondary te-login-new" type="button">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="10" cy="8" r="4"/>
+        <path d="M2 21a8 8 0 0 1 16 0M19 8v6M16 11h6"/>
+      </svg>
+      <span>登录新账号</span>
+    </button>
     <button class="te-secondary te-refresh" type="button" title="刷新" aria-label="刷新">
       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/>
@@ -350,6 +402,19 @@
 
   panel.append(header, body, footer, toast);
 
+  const oauthMask = document.createElement("div");
+  oauthMask.className = "te-modal-mask";
+  oauthMask.innerHTML = `
+    <div class="te-modal" role="dialog" aria-modal="true" aria-label="登录新账号">
+      <div class="te-modal-title">登录新账号</div>
+      <div class="te-modal-status">正在创建授权会话...</div>
+      <div class="te-modal-actions">
+        <button class="te-secondary te-oauth-reopen" type="button">重新打开</button>
+        <button class="te-primary te-oauth-cancel" type="button">取消</button>
+      </div>
+    </div>
+  `;
+
   const fab = document.createElement("button");
   fab.className = "te-fab";
   fab.type = "button";
@@ -362,11 +427,13 @@
     </svg>
   `;
 
-  root.append(panel, fab);
+  root.append(panel, oauthMask, fab);
   document.body.appendChild(root);
 
   let toastTimer = null;
   let refreshGeneration = 0;
+  let oauthSession = null;
+  let oauthPollTimer = null;
 
   function api(path, options = {}) {
     return fetch(`${API_BASE}${path}`, {
@@ -487,6 +554,81 @@
     }
   }
 
+  function setOAuthStatus(message, error = false) {
+    const status = oauthMask.querySelector(".te-modal-status");
+    status.textContent = message;
+    status.style.color = error ? "#ef4444" : "";
+  }
+
+  function stopOAuthPolling() {
+    clearTimeout(oauthPollTimer);
+    oauthPollTimer = null;
+  }
+
+  function closeOAuthDialog({ cancel = false } = {}) {
+    stopOAuthPolling();
+    if (cancel && oauthSession?.loginId) {
+      api("/api/oauth/cancel", {
+        method: "POST",
+        body: JSON.stringify({ loginId: oauthSession.loginId }),
+      }).catch(() => {});
+    }
+    oauthSession = null;
+    oauthMask.classList.remove("open");
+  }
+
+  async function pollOAuthStatus() {
+    if (!oauthSession?.loginId) return;
+    try {
+      const result = await api(
+        `/api/oauth/status?loginId=${encodeURIComponent(oauthSession.loginId)}`,
+      );
+      if (result.status === "pending") {
+        setOAuthStatus("请在浏览器中完成扫码或账号授权，完成后会自动加入账号列表。");
+      } else if (result.status === "exchanging") {
+        setOAuthStatus("授权已收到，正在交换登录凭据并保存账号...");
+      } else if (result.status === "complete") {
+        setOAuthStatus("账号已加入列表，当前登录账号不会被切换。");
+        await refresh();
+        setTimeout(() => closeOAuthDialog(), 1200);
+        return;
+      } else if (result.status === "error") {
+        setOAuthStatus(result.error || "登录失败", true);
+        return;
+      } else if (result.status === "cancelled") {
+        closeOAuthDialog();
+        return;
+      }
+      oauthPollTimer = setTimeout(pollOAuthStatus, 1000);
+    } catch (error) {
+      setOAuthStatus(error.message || String(error), true);
+    }
+  }
+
+  async function startOAuth() {
+    const button = toolbar.querySelector(".te-login-new");
+    button.disabled = true;
+    oauthMask.classList.add("open");
+    setOAuthStatus("正在创建授权会话...");
+    try {
+      const result = await api("/api/oauth/start", {
+        method: "POST",
+        body: "{}",
+      });
+      oauthSession = result;
+      if (result.browserOpened) {
+        setOAuthStatus("请在浏览器中完成扫码或账号授权，完成后会自动加入账号列表。");
+      } else {
+        setOAuthStatus(result.browserError || "浏览器未能自动打开，请点击“重新打开”。", true);
+      }
+      oauthPollTimer = setTimeout(pollOAuthStatus, 800);
+    } catch (error) {
+      setOAuthStatus(error.message || String(error), true);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   function openPanel() {
     panel.classList.add("open");
     refresh().catch(() => {});
@@ -503,12 +645,27 @@
   header.querySelector(".te-close").addEventListener("click", closePanel);
   toolbar.querySelector(".te-refresh").addEventListener("click", () => refresh());
   toolbar.querySelector(".te-backup").addEventListener("click", backupCurrent);
+  toolbar.querySelector(".te-login-new").addEventListener("click", startOAuth);
+  oauthMask.querySelector(".te-oauth-reopen").addEventListener("click", () => {
+    if (!oauthSession?.loginId) return;
+    api("/api/oauth/open", {
+      method: "POST",
+      body: JSON.stringify({ loginId: oauthSession.loginId }),
+    })
+      .then((result) => {
+        if (!result.opened) setOAuthStatus("浏览器未能打开，请稍后重试。", true);
+      })
+      .catch((error) => setOAuthStatus(error.message || String(error), true));
+  });
+  oauthMask.querySelector(".te-oauth-cancel").addEventListener("click", () => {
+    closeOAuthDialog({ cancel: true });
+  });
 
   window.__traeEnhancerCleanup = () => {
     clearTimeout(toastTimer);
+    stopOAuthPolling();
     root.remove();
     style.remove();
     delete window.__traeEnhancerCleanup;
   };
 })();
-

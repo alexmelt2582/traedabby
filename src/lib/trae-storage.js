@@ -32,9 +32,8 @@ function normalizeKey(value) {
 function parseJsonString(value) {
   if (typeof value !== "string") return value;
   const text = value.trim();
-  if (!text.startsWith("{") && !text.startsWith("[")) return value;
   try {
-    return JSON.parse(text);
+    return parseIcubesValue(text);
   } catch {
     return value;
   }
@@ -207,4 +206,5 @@ export const traeStorageKeys = Object.freeze({
   DEVICE_PREFIX,
   USERTAG_KEY,
 });
+import { parseIcubesValue } from "./trae-crypto.js";
 

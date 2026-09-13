@@ -11,12 +11,14 @@ import {
   DEFAULT_CDP_PORT,
   DEFAULT_DATA_DIR,
   DEFAULT_STORAGE_PATH,
+  DEFAULT_TRAE_EXE,
   DEFAULT_UI_PORT,
   LOOPBACK_HOST,
   parsePort,
 } from "./constants.js";
 import { AccountStore } from "./lib/accounts.js";
 import { readJsonFile, readTextFile, writeTextAtomic } from "./lib/json-file.js";
+import { TraeOAuthManager } from "./lib/trae-oauth.js";
 
 const CDP_PORT = parsePort(process.env.TRAE_ENHANCER_CDP_PORT, DEFAULT_CDP_PORT);
 const UI_PORT = parsePort(process.env.TRAE_ENHANCER_UI_PORT, DEFAULT_UI_PORT);
@@ -71,7 +73,7 @@ function requireApiToken(request, apiToken) {
   return request.headers["x-trae-enhancer-token"] === apiToken;
 }
 
-async function route(request, response, apiToken, cdpClient) {
+async function route(request, response, apiToken, cdpClient, oauthManager) {
   const requestUrl = new URL(request.url || "/", `http://${LOOPBACK_HOST}:${UI_PORT}`);
   const pathname = requestUrl.pathname;
 
@@ -119,6 +121,36 @@ async function route(request, response, apiToken, cdpClient) {
     return;
   }
 
+  if (request.method === "POST" && pathname === "/api/oauth/start") {
+    const result = await oauthManager.start();
+    jsonResponse(response, 200, { ok: true, ...result });
+    return;
+  }
+
+  if (request.method === "GET" && pathname === "/api/oauth/status") {
+    const loginId = requestUrl.searchParams.get("loginId") || "";
+    const status = oauthManager.status(loginId);
+    jsonResponse(response, status.status === "missing" ? 404 : 200, {
+      ok: status.status !== "missing",
+      ...status,
+    });
+    return;
+  }
+
+  if (request.method === "POST" && pathname === "/api/oauth/cancel") {
+    const body = await readRequestBody(request);
+    const cancelled = oauthManager.cancel(String(body.loginId || ""));
+    jsonResponse(response, 200, { ok: true, cancelled });
+    return;
+  }
+
+  if (request.method === "POST" && pathname === "/api/oauth/open") {
+    const body = await readRequestBody(request);
+    const result = await oauthManager.reopen(String(body.loginId || ""));
+    jsonResponse(response, 200, { ok: true, ...(result || { opened: false }) });
+    return;
+  }
+
   if (request.method === "POST" && pathname === "/api/inject") {
     const injected = await cdpClient.inject();
     jsonResponse(response, injected ? 200 : 503, {
@@ -141,10 +173,16 @@ async function main() {
       cdpConnected = connected;
     },
   });
+  const oauthManager = new TraeOAuthManager({
+    accountStore,
+    storagePath: STORAGE_PATH,
+    exePath: process.env.TRAE_ENHANCER_TRAE_EXE || DEFAULT_TRAE_EXE,
+    openBrowser: process.env.TRAE_ENHANCER_OPEN_BROWSER !== "0",
+  });
   cdpClient.start();
 
   const server = http.createServer((request, response) => {
-    route(request, response, apiToken, cdpClient).catch((error) => {
+    route(request, response, apiToken, cdpClient, oauthManager).catch((error) => {
       jsonResponse(response, 500, {
         ok: false,
         error: error instanceof Error ? error.message : String(error),
@@ -177,4 +215,3 @@ main().catch((error) => {
   console.error(error instanceof Error ? error.stack : error);
   process.exit(1);
 });
-
