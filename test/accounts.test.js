@@ -107,3 +107,21 @@ test("account snapshots can be exported and imported without duplicates", async 
     await fs.rm(targetDir, { recursive: true, force: true });
   }
 });
+
+test("repairIndex removes sentinel email values", async () => {
+  const dataDir = await tempDir();
+  try {
+    const store = new AccountStore(dataDir);
+    await store.backupCurrent(storageFixture(), { now: 100 });
+    const index = await store.readIndex();
+    index.accounts[0].email = "unknown";
+    await fs.writeFile(store.indexPath, JSON.stringify(index), "utf8");
+
+    const repaired = await store.repairIndex();
+    assert.equal(repaired.repaired, 1);
+    const saved = await store.readIndex();
+    assert.equal(saved.accounts[0].email, null);
+  } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});

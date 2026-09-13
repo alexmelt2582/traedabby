@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { parseIcubesValue } from "./trae-crypto.js";
+import { normalizeEmail } from "./trae-storage.js";
 
 const DEFAULT_CLIENT_ID = "en1oxy7wnw8j9n";
 const DEFAULT_APP_VERSION = "3.5.54";
@@ -71,7 +72,7 @@ function parseAuthIdentity(storageRoot) {
     const auth = parseIcubesValue(raw);
     return {
       userId: firstString(auth?.userId, auth?.user_id, auth?.uid),
-      email: firstString(auth?.email, auth?.account?.email),
+      email: normalizeEmail(firstString(auth?.email, auth?.account?.email)),
       nickname: firstString(auth?.nickname, auth?.account?.username, auth?.account?.name),
     };
   } catch {
@@ -127,4 +128,3 @@ export function buildDeviceInfo(context, publicKeyPem) {
     OSVersion: context.osVersion,
   };
 }
-

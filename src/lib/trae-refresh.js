@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 
 import { pickNumber, pickString, requestJson, safeRemoteError } from "./http.js";
 import { encryptIcubesValue, parseIcubesValue } from "./trae-crypto.js";
-import { traeStorageKeys } from "./trae-storage.js";
+import { normalizeEmail, traeStorageKeys } from "./trae-storage.js";
 
 const CLIENT_ID = "en1oxy7wnw8j9n";
 const EXCHANGE_PATH = "/trae/api/v3/oauth/ExchangeToken";
@@ -230,11 +230,13 @@ export async function refreshAuthSnapshot(snapshot) {
       ["user_id"],
       ["uid"],
     ]);
-    const profileEmail = pickString(profileRoot, [
-      ["NonPlainTextEmail"],
-      ["Email"],
-      ["email"],
-    ]);
+    const profileEmail = normalizeEmail(
+      pickString(profileRoot, [
+        ["NonPlainTextEmail"],
+        ["Email"],
+        ["email"],
+      ]),
+    );
     const profileName = pickString(profileRoot, [
       ["ScreenName"],
       ["Nickname"],

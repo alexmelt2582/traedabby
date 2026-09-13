@@ -17,6 +17,10 @@ and keeps all account data on the local machine.
   must be preserved.
 - Switching is transactional: validate, back up, atomically replace, verify, and roll
   back on failure.
+- Transaction rollback uses in-memory state only. Do not persist raw
+  `storage.before.json` or legacy `state.before.vscdb` copies.
+- Normalize sentinel identity values such as `unknown` to `null`; never store them
+  as account metadata.
 - Account exports must always be encrypted with a user-supplied password. Never write
   passwords or plaintext authentication snapshots to disk or logs.
 

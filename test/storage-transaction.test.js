@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   applyAuthClear,
   applyAuthSnapshot,
+  purgeLegacyTransactionDirectory,
   rollbackAuthSnapshot,
   verifyStorageIdentity,
 } from "../src/lib/storage-transaction.js";
@@ -28,14 +29,12 @@ test("applies and rolls back an account snapshot transaction", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "trae-switch-test-"));
   try {
     const storagePath = path.join(dir, "storage.json");
-    const transactionDir = path.join(dir, "transactions");
     await fs.writeFile(storagePath, JSON.stringify(rootForUser("1111111111111111")), "utf8");
     const snapshot = extractAuthSnapshot(rootForUser("2222222222222222"));
 
     const transaction = await applyAuthSnapshot({
       storagePath,
       snapshot,
-      transactionDir,
       now: 100,
     });
     const applied = await readJsonFile(storagePath);
@@ -45,7 +44,7 @@ test("applies and rolls back an account snapshot transaction", async () => {
       "2222222222222222",
     );
     assert.equal((await verifyStorageIdentity(storagePath, "2222222222222222")).ok, true);
-    assert.ok(await fs.stat(transaction.beforePath));
+    assert.equal(Object.hasOwn(transaction, "beforePath"), false);
 
     await rollbackAuthSnapshot(storagePath, transaction);
     const restored = await readJsonFile(storagePath);
@@ -62,7 +61,6 @@ test("fake logout clear removes only managed authentication keys", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "trae-logout-test-"));
   try {
     const storagePath = path.join(dir, "storage.json");
-    const transactionDir = path.join(dir, "transactions");
     const original = rootForUser("1111111111111111");
     original.windowState = "preserved";
     original.extensions = ["preserved-extension"];
@@ -70,17 +68,37 @@ test("fake logout clear removes only managed authentication keys", async () => {
 
     const transaction = await applyAuthClear({
       storagePath,
-      transactionDir,
       now: 200,
     });
     const cleared = await readJsonFile(storagePath);
     assert.equal(cleared.windowState, "preserved");
     assert.deepEqual(cleared.extensions, ["preserved-extension"]);
     assert.equal(Object.keys(cleared).some((key) => key.startsWith("iCube")), false);
-    assert.ok(await fs.stat(transaction.beforePath));
+    assert.equal(Object.hasOwn(transaction, "beforePath"), false);
 
     await rollbackAuthSnapshot(storagePath, transaction);
     assert.equal((await verifyStorageIdentity(storagePath, "1111111111111111")).ok, true);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("legacy transaction directories can be purged safely", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "trae-transaction-purge-"));
+  try {
+    const transactionDir = path.join(dir, "transactions");
+    await fs.mkdir(path.join(transactionDir, "legacy"), { recursive: true });
+    await fs.writeFile(
+      path.join(transactionDir, "legacy", "storage.before.json"),
+      "{}",
+      "utf8",
+    );
+    await purgeLegacyTransactionDirectory(transactionDir);
+    await assert.rejects(() => fs.access(transactionDir));
+    await assert.rejects(
+      () => purgeLegacyTransactionDirectory(path.join(dir, "not-transactions")),
+      /unexpected/,
+    );
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }

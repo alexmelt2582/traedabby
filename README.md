@@ -21,7 +21,8 @@ The account suite also supports:
 
 Authentication backups are stored locally under `data/accounts`. Only account-scoped
 `iCube*` keys are replaced or cleared; workspaces, settings, extensions, and window
-state are preserved.
+state are preserved. Rollback state for account operations is held in memory and does
+not leave raw `storage.json` copies in a transaction directory.
 
 Exported account files always contain an encrypted envelope. Passwords are never
 written to disk or included in the export.

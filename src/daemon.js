@@ -35,6 +35,7 @@ import {
 import { TraeOAuthManager } from "./lib/trae-oauth.js";
 import {
   applyAuthSnapshot,
+  purgeLegacyTransactionDirectory,
   rollbackAuthSnapshot,
   waitForStorageIdentity,
 } from "./lib/storage-transaction.js";
@@ -45,7 +46,8 @@ const DATA_DIR = process.env.TRAE_ENHANCER_DATA_DIR || DEFAULT_DATA_DIR;
 const STORAGE_PATH = process.env.TRAE_ENHANCER_STORAGE_PATH || DEFAULT_STORAGE_PATH;
 const TRAE_EXE = process.env.TRAE_ENHANCER_TRAE_EXE || DEFAULT_TRAE_EXE;
 const API_TOKEN_PATH = path.join(DATA_DIR, "api-token");
-const TRANSACTION_DIR = path.join(DATA_DIR, "transactions");
+const LEGACY_TRANSACTION_DIR = path.join(DATA_DIR, "transactions");
+const FAKE_LOGOUT_SESSION_PATH = path.join(DATA_DIR, "fake-logout", "session.json");
 const MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024;
 
 const accountStore = new AccountStore(DATA_DIR);
@@ -144,7 +146,6 @@ async function switchAccount(accountId) {
     transaction = await applyAuthSnapshot({
       storagePath: STORAGE_PATH,
       snapshot,
-      transactionDir: TRANSACTION_DIR,
     });
   } catch (error) {
     await startTraeForSwitch().catch(() => false);
@@ -312,7 +313,7 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
 
   if (request.method === "POST" && pathname === "/api/fake-logout/cancel") {
     const body = await readRequestBody(request);
-    const cancelled = fakeLogoutManager.cancel(String(body.sessionId || ""));
+    const cancelled = await fakeLogoutManager.cancel(String(body.sessionId || ""));
     jsonResponse(response, 200, { ok: true, cancelled });
     return;
   }
@@ -368,6 +369,10 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
 
 async function main() {
   await fs.mkdir(DATA_DIR, { recursive: true });
+  const purgedTransactionDirectory = await purgeLegacyTransactionDirectory(
+    LEGACY_TRANSACTION_DIR,
+  );
+  const accountRepair = await accountStore.repairIndex();
   const apiToken = await getApiToken();
   const cdpClient = new CdpClient({
     port: CDP_PORT,
@@ -385,10 +390,11 @@ async function main() {
   const fakeLogoutManager = new TraeFakeLogoutManager({
     accountStore,
     storagePath: STORAGE_PATH,
-    transactionDir: TRANSACTION_DIR,
     stopTrae: stopTraeForSwitch,
     startTrae: startTraeForSwitch,
+    isTraeRunning: async () => (await findTraeProcessIds(TRAE_EXE)).length > 0,
     getLiveIdentity: () => cdpClient.getLiveIdentity(),
+    sessionPath: FAKE_LOGOUT_SESSION_PATH,
   });
   cdpClient.start();
 
@@ -414,6 +420,17 @@ async function main() {
   });
 
   console.log(`${APP_NAME} daemon listening on http://${LOOPBACK_HOST}:${UI_PORT}`);
+  console.log(`[cleanup] removed legacy transactions: ${purgedTransactionDirectory}`);
+  if (accountRepair.repaired) {
+    console.log(`[cleanup] repaired account metadata: ${accountRepair.repaired}`);
+  }
+  const recoveredFakeLogout = await fakeLogoutManager.recover();
+  if (recoveredFakeLogout.status !== "missing") {
+    console.log(
+      `[fake-logout] recovered session status=${recoveredFakeLogout.status}`,
+    );
+    await cdpClient.inject().catch(() => false);
+  }
 
   async function shutdown() {
     cdpClient.stop().catch(() => {});

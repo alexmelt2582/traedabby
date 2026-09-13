@@ -7,7 +7,7 @@ import { pickNumber, pickString, requestJson, safeRemoteError } from "./http.js"
 import { readJsonFile } from "./json-file.js";
 import { encryptIcubesValue } from "./trae-crypto.js";
 import { buildDeviceInfo, collectLoginContext } from "./trae-product.js";
-import { traeStorageKeys } from "./trae-storage.js";
+import { normalizeEmail, traeStorageKeys } from "./trae-storage.js";
 
 const CALLBACK_PATH = "/authorize";
 const AUTHORIZATION_PATH = "/authorization";
@@ -219,14 +219,16 @@ function buildIdentity(userInfo, callbackInfo, accessToken) {
       ["UserID"],
       ["uid"],
     ]),
-    email: pick([
-      ["Result", "NonPlainTextEmail"],
-      ["Result", "Email"],
-      ["Result", "email"],
-      ["NonPlainTextEmail"],
-      ["data", "email"],
-      ["email"],
-    ]),
+    email: normalizeEmail(
+      pick([
+        ["Result", "NonPlainTextEmail"],
+        ["Result", "Email"],
+        ["Result", "email"],
+        ["NonPlainTextEmail"],
+        ["data", "email"],
+        ["email"],
+      ]),
+    ),
     nickname: pick([
       ["Result", "ScreenName"],
       ["Result", "Nickname"],

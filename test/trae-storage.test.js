@@ -6,7 +6,9 @@ import {
   extractIdentityFromSnapshot,
   maskAccountValue,
   mergeAuthSnapshot,
+  normalizeEmail,
   normalizeAuthSnapshotForInjection,
+  sanitizeAuthSnapshotEmails,
   traeStorageKeys,
   validateAuthSnapshot,
 } from "../src/lib/trae-storage.js";
@@ -89,6 +91,46 @@ test("identity extraction prefers the decrypted auth userId over server data", (
   });
   const identity = extractIdentityFromSnapshot(extractAuthSnapshot(source));
   assert.equal(identity.userId, "9999999999999999");
+});
+
+test("sentinel and non-email values normalize to null", () => {
+  assert.equal(normalizeEmail("unknown"), null);
+  assert.equal(normalizeEmail("N/A"), null);
+  assert.equal(normalizeEmail("not-an-email"), null);
+  assert.equal(normalizeEmail(" Tester@Example.COM "), "tester@example.com");
+});
+
+test("identity extraction rejects sentinel email values", () => {
+  const source = storageFixture();
+  source["iCubeAuthInfo://icube.cloudide"] = JSON.stringify({
+    userId: "1026288307407252",
+    email: "unknown",
+    account: {
+      userId: "1026288307407252",
+      email: "unknown",
+      username: "tester",
+    },
+  });
+  source["iCubeServerData://icube.cloudide"] = JSON.stringify({
+    account: { userId: "1026288307407252", email: "unknown" },
+  });
+  const snapshot = extractAuthSnapshot(source);
+  assert.equal(extractIdentityFromSnapshot(snapshot).email, null);
+  const sanitized = sanitizeAuthSnapshotEmails(snapshot);
+  const sanitizedAuth = parseIcubesValue(
+    sanitized.keys["iCubeAuthInfo://icube.cloudide"],
+  );
+  assert.equal(sanitizedAuth.email, "");
+  assert.equal(sanitizedAuth.account.email, "");
+  assert.equal(
+    JSON.parse(sanitized.keys["iCubeServerData://icube.cloudide"]).account.email,
+    null,
+  );
+  assert.deepEqual(sanitizeAuthSnapshotEmails(sanitized), sanitized);
+  const normalized = normalizeAuthSnapshotForInjection(snapshot);
+  const auth = parseIcubesValue(normalized.keys["iCubeAuthInfo://icube.cloudide"]);
+  assert.equal(auth.email, "");
+  assert.equal(auth.account.email, "");
 });
 
 test("account values are masked for the public API", () => {

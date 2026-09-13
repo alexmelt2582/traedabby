@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 
 import { readJsonFile, writeJsonAtomic } from "./json-file.js";
@@ -13,14 +14,10 @@ import { setTimeout as delay } from "node:timers/promises";
 export async function applyAuthSnapshot({
   storagePath,
   snapshot,
-  transactionDir,
   now = Date.now(),
 }) {
   const currentRoot = await readJsonFile(storagePath);
   const transactionId = `${now}-${crypto.randomBytes(6).toString("hex")}`;
-  const directory = path.join(transactionDir, transactionId);
-  const beforePath = path.join(directory, "storage.before.json");
-  await writeJsonAtomic(beforePath, currentRoot, { mode: 0o600 });
 
   const merged = mergeAuthSnapshot(currentRoot, snapshot);
   try {
@@ -32,18 +29,14 @@ export async function applyAuthSnapshot({
 
   return {
     transactionId,
-    beforePath,
     previousRoot: currentRoot,
     mergedRoot: merged,
   };
 }
 
-export async function applyAuthClear({ storagePath, transactionDir, now = Date.now() }) {
+export async function applyAuthClear({ storagePath, now = Date.now() }) {
   const currentRoot = await readJsonFile(storagePath);
   const transactionId = `${now}-${crypto.randomBytes(6).toString("hex")}`;
-  const directory = path.join(transactionDir, transactionId);
-  const beforePath = path.join(directory, "storage.before.json");
-  await writeJsonAtomic(beforePath, currentRoot, { mode: 0o600 });
 
   const clearedRoot = clearManagedAuthKeys(currentRoot);
   try {
@@ -55,10 +48,22 @@ export async function applyAuthClear({ storagePath, transactionDir, now = Date.n
 
   return {
     transactionId,
-    beforePath,
     previousRoot: currentRoot,
     clearedRoot,
   };
+}
+
+export async function purgeLegacyTransactionDirectory(transactionDir) {
+  const target = path.resolve(String(transactionDir || ""));
+  if (
+    !transactionDir ||
+    path.basename(target) !== "transactions" ||
+    target === path.parse(target).root
+  ) {
+    throw new Error("Refusing to purge an unexpected transaction directory");
+  }
+  await fs.rm(target, { recursive: true, force: true });
+  return target;
 }
 
 export async function rollbackAuthSnapshot(storagePath, transaction) {

@@ -16,6 +16,15 @@ const IDENTITY_KEYS = new Set([
 const EMAIL_KEYS = new Set(["email", "nonplaintextemail", "mail"]);
 const PHONE_KEYS = new Set(["phone", "mobile", "phonenumber", "nonplaintextmobile"]);
 const NAME_KEYS = new Set(["nickname", "displayname", "username", "screenname"]);
+const INVALID_EMAIL_VALUES = new Set([
+  "unknown",
+  "null",
+  "undefined",
+  "n/a",
+  "na",
+  "none",
+  "-",
+]);
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -25,6 +34,12 @@ function normalizeText(value) {
   if (typeof value === "string") return value.trim() || null;
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   return null;
+}
+
+export function normalizeEmail(value) {
+  const text = normalizeText(value)?.toLowerCase();
+  if (!text || INVALID_EMAIL_VALUES.has(text) || !text.includes("@")) return null;
+  return text;
 }
 
 function normalizeKey(value) {
@@ -120,6 +135,67 @@ export function clearManagedAuthKeys(storageRoot) {
   return cleared;
 }
 
+function sanitizeEmailFields(value, depth = 0) {
+  if (depth > 10 || value === null || value === undefined) return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeEmailFields(item, depth + 1));
+  }
+  if (!isObject(value)) return value;
+  const result = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (EMAIL_KEYS.has(normalizeKey(key)) && typeof child === "string") {
+      result[key] = normalizeEmail(child);
+    } else {
+      result[key] = sanitizeEmailFields(child, depth + 1);
+    }
+  }
+  return result;
+}
+
+export function sanitizeAuthSnapshotEmails(snapshot) {
+  validateAuthSnapshot(snapshot);
+  const sanitized = structuredClone(snapshot);
+  const authKey = Object.keys(sanitized.keys).find(isUserAuthKey);
+  if (authKey) {
+    try {
+      const auth = parseIcubesValue(sanitized.keys[authKey]);
+      if (isObject(auth)) {
+        let changed = false;
+        const rawAuthEmail = normalizeText(auth.email);
+        const authEmail = normalizeEmail(rawAuthEmail);
+        if (rawAuthEmail && rawAuthEmail !== authEmail) {
+          auth.email = authEmail || "";
+          changed = true;
+        }
+        if (isObject(auth.account)) {
+          const rawAccountEmail = normalizeText(auth.account.email);
+          const accountEmail = normalizeEmail(rawAccountEmail);
+          if (rawAccountEmail && rawAccountEmail !== accountEmail) {
+            auth.account.email = accountEmail || "";
+            changed = true;
+          }
+        }
+        if (changed) sanitized.keys[authKey] = encryptIcubesValue(auth);
+      }
+    } catch {
+      // Leave opaque or legacy values unchanged when they cannot be decoded.
+    }
+  }
+
+  for (const key of Object.keys(sanitized.keys)) {
+    if (!key.startsWith(SERVER_PREFIX) && !key.startsWith(ENTITLEMENT_PREFIX)) continue;
+    const raw = sanitized.keys[key];
+    if (typeof raw !== "string" || !/^[\s]*[\[{]/.test(raw)) continue;
+    try {
+      const next = JSON.stringify(sanitizeEmailFields(JSON.parse(raw)));
+      if (next !== raw) sanitized.keys[key] = next;
+    } catch {
+      // Leave non-JSON managed values unchanged.
+    }
+  }
+  return sanitized;
+}
+
 function normalizeIsoTimestamp(value, fallback) {
   if (typeof value === "string" && value.trim()) {
     const parsed = new Date(value);
@@ -143,7 +219,7 @@ export function normalizeAuthSnapshotForInjection(snapshot) {
 
   const account = isObject(auth.account) ? auth.account : {};
   const userId = normalizeText(auth.userId) || normalizeText(account.userId);
-  const email = normalizeText(auth.email) || normalizeText(account.email) || "";
+  const email = normalizeEmail(auth.email) || normalizeEmail(account.email) || "";
   const nickname = normalizeText(account.username) || email || userId || "TRAE account";
   const userTag = normalizeText(auth.userTag) || normalizeText(account.userTag) || "row";
   const now = new Date().toISOString();
@@ -153,7 +229,7 @@ export function normalizeAuthSnapshotForInjection(snapshot) {
   account.iat ??= 0;
   account.organization ??= "";
   account.work_country ??= "";
-  account.email ??= email;
+  account.email = email;
   account.avatar_url ??= "";
   account.description ??= "";
   account.scope = normalizeText(account.scope) || "marscode";
@@ -186,6 +262,7 @@ export function normalizeAuthSnapshotForInjection(snapshot) {
     _aiRegion: normalizeText(auth.userRegion?._aiRegion) || "CN",
   };
   auth.account = account;
+  auth.email = email;
 
   normalized.keys[authKey] = encryptIcubesValue(auth);
   return normalized;
@@ -247,9 +324,9 @@ function collectIdentityCandidates(root) {
           candidates.push({ kind: "userId", value: text, path: nextPath.join(".") });
         }
       } else if (EMAIL_KEYS.has(normalized)) {
-        const text = normalizeText(child);
-        if (text && text.includes("@")) {
-          candidates.push({ kind: "email", value: text.toLowerCase(), path: nextPath.join(".") });
+        const email = normalizeEmail(child);
+        if (email) {
+          candidates.push({ kind: "email", value: email, path: nextPath.join(".") });
         }
       } else if (PHONE_KEYS.has(normalized)) {
         const text = normalizeText(child);
@@ -299,7 +376,7 @@ export function extractIdentityFromSnapshot(snapshot) {
   const candidates = roots.flatMap(collectIdentityCandidates);
   const account = isObject(auth?.account) ? auth.account : {};
   const authUserId = normalizeText(auth?.userId) || normalizeText(account.userId);
-  const authEmail = normalizeText(auth?.email) || normalizeText(account.email);
+  const authEmail = normalizeEmail(auth?.email) || normalizeEmail(account.email);
   const authNickname =
     normalizeText(account.username) ||
     normalizeText(account.nickname) ||
@@ -321,7 +398,10 @@ export function extractIdentityFromSnapshot(snapshot) {
 export function mergeIdentity(primary, fallback) {
   const result = {};
   for (const key of ["userId", "email", "phone", "nickname"]) {
-    result[key] = normalizeText(primary?.[key]) || normalizeText(fallback?.[key]) || null;
+    result[key] =
+      key === "email"
+        ? normalizeEmail(primary?.[key]) || normalizeEmail(fallback?.[key]) || null
+        : normalizeText(primary?.[key]) || normalizeText(fallback?.[key]) || null;
   }
   return result;
 }

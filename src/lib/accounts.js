@@ -7,13 +7,15 @@ import {
   extractIdentityFromSnapshot,
   maskAccountValue,
   mergeIdentity,
+  normalizeEmail,
+  sanitizeAuthSnapshotEmails,
   validateAuthSnapshot,
 } from "./trae-storage.js";
 
 function cleanIdentity(identity) {
   return {
     userId: identity?.userId ? String(identity.userId).trim() : null,
-    email: identity?.email ? String(identity.email).trim().toLowerCase() : null,
+    email: normalizeEmail(identity?.email),
     phone: identity?.phone ? String(identity.phone).trim() : null,
     nickname: identity?.nickname ? String(identity.nickname).trim() : null,
   };
@@ -99,12 +101,61 @@ export class AccountStore {
     return result.sort((left, right) => right.updatedAt - left.updatedAt);
   }
 
+  async repairIndex() {
+    const index = await this.readIndex();
+    let repaired = 0;
+    let snapshotsRepaired = 0;
+    const accounts = [];
+    for (const record of index.accounts) {
+      try {
+        const snapshot = await readJsonFile(this.snapshotPath(record.id), {
+          required: false,
+        });
+        if (snapshot) {
+          const sanitized = sanitizeAuthSnapshotEmails(snapshot);
+          if (JSON.stringify(snapshot) !== JSON.stringify(sanitized)) {
+            snapshotsRepaired += 1;
+            await writeJsonAtomic(this.snapshotPath(record.id), sanitized, {
+              mode: 0o600,
+            });
+          }
+        }
+      } catch {
+        // Broken snapshots remain hidden until a fresh backup repairs them.
+      }
+      const email = normalizeEmail(record.email);
+      if (email !== record.email) {
+        repaired += 1;
+        accounts.push({
+          ...record,
+          email,
+          displayName:
+            record.displayName === record.email
+              ? safeDisplayName({ ...record, email })
+              : record.displayName,
+        });
+      } else {
+        accounts.push(record);
+      }
+    }
+    if (repaired) {
+      await writeJsonAtomic(
+        this.indexPath,
+        { ...index, schemaVersion: 1, accounts },
+        { mode: 0o600 },
+      );
+    }
+    return { repaired, snapshotsRepaired };
+  }
+
   snapshotPath(accountId) {
     return path.join(this.accountsDir, accountId, "snapshot.json");
   }
 
   async backupCurrent(storageRoot, { liveIdentity = null, now = Date.now() } = {}) {
-    const snapshot = extractAuthSnapshot(storageRoot, { capturedAt: now });
+    const snapshot = sanitizeAuthSnapshotEmails(
+      extractAuthSnapshot(storageRoot, { capturedAt: now }),
+    );
     const storedIdentity = extractIdentityFromSnapshot(snapshot);
     const identity = cleanIdentity(mergeIdentity(liveIdentity, storedIdentity));
     const identityKey = accountIdentityKey(identity);
@@ -149,6 +200,7 @@ export class AccountStore {
   }
 
   async saveSnapshot(accountId, snapshot, { now = Date.now() } = {}) {
+    snapshot = sanitizeAuthSnapshotEmails(snapshot);
     validateAuthSnapshot(snapshot);
     const index = await this.readIndex();
     const position = index.accounts.findIndex((record) => record.id === accountId);
@@ -202,7 +254,7 @@ export class AccountStore {
     const plannedByIdentity = new Map();
     let skipped = 0;
     for (const item of items) {
-      const snapshot = item?.snapshot;
+      const snapshot = sanitizeAuthSnapshotEmails(item?.snapshot);
       validateAuthSnapshot(snapshot);
       const identity = cleanIdentity(extractIdentityFromSnapshot(snapshot));
       const identityKey = accountIdentityKey(identity);
