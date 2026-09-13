@@ -16,10 +16,15 @@ The account suite also supports:
 - seamless login in the system browser without closing TRAE;
 - traditional fake logout that backs up the current account, keeps non-authentication
   state, reopens TRAE at the login page, and saves the new account automatically.
+- encrypted account export and import using scrypt plus AES-256-GCM, with deduplication
+  by account identity and no automatic account switching during import.
 
 Authentication backups are stored locally under `data/accounts`. Only account-scoped
 `iCube*` keys are replaced or cleared; workspaces, settings, extensions, and window
 state are preserved.
+
+Exported account files always contain an encrypted envelope. Passwords are never
+written to disk or included in the export.
 
 ## Development
 

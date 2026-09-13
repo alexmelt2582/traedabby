@@ -18,6 +18,10 @@ import {
 } from "./constants.js";
 import { AccountStore } from "./lib/accounts.js";
 import { readJsonFile, readTextFile, writeTextAtomic } from "./lib/json-file.js";
+import {
+  createAccountsExport,
+  openAccountsExport,
+} from "./lib/secure-transfer.js";
 import { normalizeAuthSnapshotForInjection } from "./lib/trae-storage.js";
 import { TraeFakeLogoutManager } from "./lib/trae-fake-logout.js";
 import { refreshAuthSnapshot } from "./lib/trae-refresh.js";
@@ -42,6 +46,7 @@ const STORAGE_PATH = process.env.TRAE_ENHANCER_STORAGE_PATH || DEFAULT_STORAGE_P
 const TRAE_EXE = process.env.TRAE_ENHANCER_TRAE_EXE || DEFAULT_TRAE_EXE;
 const API_TOKEN_PATH = path.join(DATA_DIR, "api-token");
 const TRANSACTION_DIR = path.join(DATA_DIR, "transactions");
+const MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024;
 
 const accountStore = new AccountStore(DATA_DIR);
 let cdpConnected = false;
@@ -80,7 +85,7 @@ async function readRequestBody(request) {
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 1024 * 1024) throw new Error("Request body is too large");
+    if (size > MAX_REQUEST_BODY_BYTES) throw new Error("Request body is too large");
     chunks.push(chunk);
   }
   if (!chunks.length) return {};
@@ -218,6 +223,41 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
     const liveIdentity = await cdpClient.getLiveIdentity();
     const result = await accountStore.backupCurrent(storageRoot, { liveIdentity });
     jsonResponse(response, 200, { ok: true, ...result });
+    return;
+  }
+
+  if (request.method === "POST" && pathname === "/api/accounts/export") {
+    const body = await readRequestBody(request);
+    const accountIds = Array.isArray(body.accountIds)
+      ? body.accountIds.map((value) => String(value || "").trim()).filter(Boolean)
+      : null;
+    const snapshots = await accountStore.exportSnapshots(accountIds);
+    const result = await createAccountsExport(snapshots, String(body.password || ""));
+    jsonResponse(response, 200, {
+      ok: true,
+      filename: result.filename,
+      mimeType: result.mimeType,
+      content: result.content,
+      count: result.count,
+    });
+    return;
+  }
+
+  if (request.method === "POST" && pathname === "/api/accounts/import") {
+    const body = await readRequestBody(request);
+    const payload = await openAccountsExport(
+      String(body.content || ""),
+      String(body.password || ""),
+    );
+    const result = await accountStore.importSnapshots(payload.accounts);
+    jsonResponse(response, 200, {
+      ok: true,
+      imported: result.imported,
+      updated: result.updated,
+      skipped: result.skipped,
+      total: result.total,
+      count: result.imported + result.updated,
+    });
     return;
   }
 

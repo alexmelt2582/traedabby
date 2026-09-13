@@ -47,6 +47,27 @@ function publicAccount(record) {
   };
 }
 
+function buildAccountRecord(identity, existing, snapshot, now) {
+  const identityKey = accountIdentityKey(identity);
+  if (!identityKey) {
+    throw new Error("Imported TRAE account does not contain a stable identity");
+  }
+  return {
+    schemaVersion: 1,
+    id: existing?.id || `acct_${stableHash(identityKey)}`,
+    userId: identity.userId,
+    email: identity.email,
+    phone: identity.phone,
+    nickname: identity.nickname,
+    displayName: safeDisplayName(identity),
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+    snapshotCapturedAt: Number.isFinite(Number(snapshot.capturedAt))
+      ? Number(snapshot.capturedAt)
+      : now,
+  };
+}
+
 export class AccountStore {
   constructor(dataDir) {
     this.dataDir = dataDir;
@@ -104,16 +125,8 @@ export class AccountStore {
     );
     const existing = existingIndex >= 0 ? index.accounts[existingIndex] : null;
     const record = {
-      schemaVersion: 1,
+      ...buildAccountRecord(identity, existing, snapshot, now),
       id: accountId,
-      userId: identity.userId,
-      email: identity.email,
-      phone: identity.phone,
-      nickname: identity.nickname,
-      displayName: safeDisplayName(identity),
-      createdAt: existing?.createdAt || now,
-      updatedAt: now,
-      snapshotCapturedAt: snapshot.capturedAt,
     };
 
     if (existingIndex >= 0) index.accounts[existingIndex] = record;
@@ -157,6 +170,112 @@ export class AccountStore {
     };
     await writeJsonAtomic(this.indexPath, index, { mode: 0o600 });
     return publicAccount(index.accounts[position]);
+  }
+
+  async exportSnapshots(accountIds = null) {
+    const index = await this.readIndex();
+    const requested = accountIds ? new Set(accountIds.map(String)) : null;
+    const records = requested
+      ? index.accounts.filter((record) => requested.has(record.id))
+      : index.accounts;
+    if (requested && records.length !== requested.size) {
+      throw new Error("One or more selected account backups were not found");
+    }
+    const result = [];
+    for (const record of records) {
+      const snapshot = await this.readSnapshot(record.id);
+      result.push({
+        account: publicAccount(record),
+        snapshot,
+      });
+    }
+    if (!result.length) throw new Error("没有可导出的账号备份");
+    return result;
+  }
+
+  async importSnapshots(items, { now = Date.now() } = {}) {
+    if (!Array.isArray(items) || !items.length) {
+      throw new Error("导入文件中没有账号数据");
+    }
+
+    const index = await this.readIndex();
+    const plannedByIdentity = new Map();
+    let skipped = 0;
+    for (const item of items) {
+      const snapshot = item?.snapshot;
+      validateAuthSnapshot(snapshot);
+      const identity = cleanIdentity(extractIdentityFromSnapshot(snapshot));
+      const identityKey = accountIdentityKey(identity);
+      if (!identityKey) {
+        skipped += 1;
+        continue;
+      }
+      if (plannedByIdentity.has(identityKey)) skipped += 1;
+      plannedByIdentity.set(identityKey, { identity, identityKey, snapshot });
+    }
+    if (!plannedByIdentity.size) {
+      throw new Error("导入文件中没有可识别的账号");
+    }
+
+    const previousSnapshots = new Map();
+    const planned = [];
+    let imported = 0;
+    let updated = 0;
+    for (const { identity, identityKey, snapshot } of plannedByIdentity.values()) {
+      const existingIndex = index.accounts.findIndex(
+        (record) => record.id === `acct_${stableHash(identityKey)}` ||
+          accountIdentityKey(record) === identityKey,
+      );
+      const existing = existingIndex >= 0 ? index.accounts[existingIndex] : null;
+      const record = buildAccountRecord(identity, existing, snapshot, now);
+      previousSnapshots.set(
+        record.id,
+        await readJsonFile(this.snapshotPath(record.id), { required: false }),
+      );
+      planned.push({ existingIndex, record, snapshot });
+      if (existing) updated += 1;
+      else imported += 1;
+    }
+
+    const written = [];
+    try {
+      for (const item of planned) {
+        await writeJsonAtomic(this.snapshotPath(item.record.id), item.snapshot, {
+          mode: 0o600,
+        });
+        written.push(item.record.id);
+      }
+      const nextIndex = {
+        ...index,
+        schemaVersion: 1,
+        accounts: [...index.accounts],
+      };
+      for (const item of planned) {
+        if (item.existingIndex >= 0) nextIndex.accounts[item.existingIndex] = item.record;
+        else nextIndex.accounts.push(item.record);
+      }
+      await writeJsonAtomic(this.indexPath, nextIndex, { mode: 0o600 });
+    } catch (error) {
+      for (const accountId of written.reverse()) {
+        const previous = previousSnapshots.get(accountId);
+        if (previous) {
+          await writeJsonAtomic(this.snapshotPath(accountId), previous, {
+            mode: 0o600,
+          }).catch(() => {});
+        } else {
+          await fs.rm(this.snapshotPath(accountId), { recursive: true, force: true }).catch(() => {});
+        }
+      }
+      throw error;
+    }
+
+    return {
+      imported,
+      updated,
+      skipped,
+      total: items.length,
+      accounts: planned.map((item) => publicAccount(item.record)),
+    };
   }
 
   async findAccount(accountId) {

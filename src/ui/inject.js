@@ -166,6 +166,12 @@
 
     #${ROOT_ID} .te-refresh { margin-left: auto; }
 
+    #${ROOT_ID} .te-account-io {
+      width: 32px;
+      padding: 0;
+      flex: 0 0 32px;
+    }
+
     #${ROOT_ID} .te-primary:hover,
     #${ROOT_ID} .te-secondary:hover { filter: brightness(1.06); }
 
@@ -377,6 +383,111 @@
       line-height: 1.55;
     }
 
+    #${ROOT_ID} .te-transfer-select-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 14px;
+      color: var(--te-muted);
+      font-size: 11px;
+    }
+
+    #${ROOT_ID} .te-transfer-toggle {
+      border: 0;
+      color: var(--te-accent);
+      background: transparent;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    #${ROOT_ID} .te-transfer-options {
+      max-height: 168px;
+      display: grid;
+      gap: 6px;
+      margin-top: 8px;
+      overflow: auto;
+    }
+
+    #${ROOT_ID} .te-transfer-option {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 8px 9px;
+      border: 1px solid var(--te-border);
+      border-radius: 9px;
+      background: var(--te-surface);
+      cursor: pointer;
+    }
+
+    #${ROOT_ID} .te-transfer-option.selected {
+      border-color: var(--te-accent);
+    }
+
+    #${ROOT_ID} .te-transfer-option input {
+      width: 15px;
+      height: 15px;
+      flex: 0 0 15px;
+      accent-color: var(--te-accent);
+    }
+
+    #${ROOT_ID} .te-transfer-option-copy { min-width: 0; }
+
+    #${ROOT_ID} .te-transfer-option-name {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    #${ROOT_ID} .te-transfer-option-meta {
+      display: block;
+      margin-top: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--te-muted);
+      font-size: 10px;
+    }
+
+    #${ROOT_ID} .te-field {
+      display: grid;
+      gap: 6px;
+      margin-top: 12px;
+      color: var(--te-muted);
+      font-size: 11px;
+    }
+
+    #${ROOT_ID} .te-field input {
+      width: 100%;
+      height: 34px;
+      padding: 0 10px;
+      border: 1px solid var(--te-border);
+      border-radius: 8px;
+      outline: 0;
+      color: var(--te-text);
+      background: var(--te-surface);
+      font: inherit;
+    }
+
+    #${ROOT_ID} .te-field input:focus {
+      border-color: var(--te-accent);
+      box-shadow: 0 0 0 1px var(--te-accent);
+    }
+
+    #${ROOT_ID} .te-transfer-file {
+      margin-top: 12px;
+      padding: 9px 10px;
+      overflow: hidden;
+      border: 1px solid var(--te-border);
+      border-radius: 8px;
+      background: var(--te-surface);
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     #${ROOT_ID} .te-modal-actions {
       display: flex;
       justify-content: flex-end;
@@ -442,6 +553,18 @@
       </svg>
       <span>登录新账号</span>
     </button>
+    <button class="te-secondary te-account-io te-export-accounts" type="button" title="导出账号" aria-label="导出账号">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3v12M7 10l5 5 5-5"/>
+        <path d="M5 21h14"/>
+      </svg>
+    </button>
+    <button class="te-secondary te-account-io te-import-accounts" type="button" title="导入账号" aria-label="导入账号">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 17V5M7 10l5-5 5 5"/>
+        <path d="M5 21h14"/>
+      </svg>
+    </button>
     <button class="te-secondary te-refresh" type="button" title="刷新" aria-label="刷新">
       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/>
@@ -504,6 +627,25 @@
     </div>
   `;
 
+  const transferMask = document.createElement("div");
+  transferMask.className = "te-modal-mask";
+  transferMask.innerHTML = `
+    <div class="te-modal" role="dialog" aria-modal="true" aria-label="账号导入导出">
+      <div class="te-modal-title te-transfer-title"></div>
+      <div class="te-transfer-body"></div>
+      <div class="te-modal-status te-transfer-status"></div>
+      <div class="te-modal-actions">
+        <button class="te-secondary te-transfer-cancel" type="button">取消</button>
+        <button class="te-primary te-transfer-confirm" type="button">确定</button>
+      </div>
+    </div>
+  `;
+
+  const importFileInput = document.createElement("input");
+  importFileInput.type = "file";
+  importFileInput.accept = ".json,application/json";
+  importFileInput.hidden = true;
+
   const fab = document.createElement("button");
   fab.className = "te-fab";
   fab.type = "button";
@@ -516,7 +658,7 @@
     </svg>
   `;
 
-  root.append(panel, loginChoiceMask, oauthMask, fab);
+  root.append(panel, loginChoiceMask, oauthMask, transferMask, importFileInput, fab);
   document.body.appendChild(root);
 
   let toastTimer = null;
@@ -526,6 +668,8 @@
   let fakeLogoutSession = null;
   let fakeLogoutPollTimer = null;
   let backgroundLoginNoticeShown = false;
+  let transferBusy = false;
+  let transferSubmit = null;
 
   function loginSessionSeen(sessionId) {
     if (!sessionId) return false;
@@ -958,6 +1102,193 @@
     }
   }
 
+  function setTransferStatus(message, error = false) {
+    const status = transferMask.querySelector(".te-transfer-status");
+    status.textContent = message;
+    status.style.color = error ? "#ef4444" : "";
+  }
+
+  function closeTransferDialog() {
+    transferMask.classList.remove("open");
+    transferMask.querySelector(".te-transfer-body").replaceChildren();
+    setTransferStatus("");
+    transferSubmit = null;
+    transferBusy = false;
+  }
+
+  function openTransferDialog({ title, confirmText }) {
+    transferMask.querySelector(".te-transfer-title").textContent = title;
+    transferMask.querySelector(".te-transfer-confirm").textContent = confirmText;
+    transferMask.querySelector(".te-transfer-confirm").disabled = false;
+    transferMask.querySelector(".te-transfer-cancel").disabled = false;
+    const body = transferMask.querySelector(".te-transfer-body");
+    body.replaceChildren();
+    setTransferStatus("");
+    transferMask.classList.add("open");
+    return body;
+  }
+
+  function createField(labelText, { type = "password", autocomplete = "new-password" } = {}) {
+    const label = document.createElement("label");
+    label.className = "te-field";
+    const caption = document.createElement("span");
+    caption.textContent = labelText;
+    const input = document.createElement("input");
+    input.type = type;
+    input.autocomplete = autocomplete;
+    label.append(caption, input);
+    return { label, input };
+  }
+
+  function downloadTransfer(result, fallbackName) {
+    const blob = new Blob([result.content], {
+      type: result.mimeType || "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = result.filename || fallbackName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    setTimeout(() => {
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    }, 300);
+  }
+
+  async function openExportDialog() {
+    try {
+      const data = await api("/api/accounts");
+      if (!data.accounts.length) {
+        showToast("没有可导出的账号备份", true);
+        return;
+      }
+      const body = openTransferDialog({
+        title: "导出账号",
+        confirmText: "导出",
+      });
+      const selected = new Set(data.accounts.map((account) => account.id));
+      const heading = document.createElement("div");
+      heading.className = "te-transfer-select-head";
+      const headingLabel = document.createElement("span");
+      headingLabel.textContent = "选择账号";
+      const toggle = document.createElement("button");
+      toggle.className = "te-transfer-toggle";
+      toggle.type = "button";
+      toggle.textContent = "取消全选";
+      heading.append(headingLabel, toggle);
+
+      const options = document.createElement("div");
+      options.className = "te-transfer-options";
+      for (const account of data.accounts) {
+        const label = document.createElement("label");
+        label.className = "te-transfer-option selected";
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.checked = true;
+        input.dataset.accountId = account.id;
+        const copy = document.createElement("span");
+        copy.className = "te-transfer-option-copy";
+        const name = document.createElement("span");
+        name.className = "te-transfer-option-name";
+        name.textContent = account.displayName || "TRAE account";
+        const meta = document.createElement("span");
+        meta.className = "te-transfer-option-meta";
+        meta.textContent = accountMeta(account);
+        copy.append(name, meta);
+        label.append(input, copy);
+        input.addEventListener("change", () => {
+          if (input.checked) selected.add(account.id);
+          else selected.delete(account.id);
+          label.classList.toggle("selected", input.checked);
+          toggle.textContent = selected.size === data.accounts.length ? "取消全选" : "全选";
+        });
+        options.appendChild(label);
+      }
+      toggle.addEventListener("click", () => {
+        const selectAll = selected.size !== data.accounts.length;
+        selected.clear();
+        if (selectAll) {
+          data.accounts.forEach((account) => selected.add(account.id));
+        }
+        options.querySelectorAll("input[data-account-id]").forEach((input) => {
+          input.checked = selectAll;
+          input.closest(".te-transfer-option")?.classList.toggle("selected", selectAll);
+        });
+        toggle.textContent = selectAll ? "取消全选" : "全选";
+      });
+
+      const password = createField("密码");
+      const confirmation = createField("确认密码");
+      body.append(heading, options, password.label, confirmation.label);
+      password.input.focus();
+
+      transferSubmit = async () => {
+        if (!selected.size) throw new Error("请至少选择一个账号");
+        if (password.input.value.trim().length < 8) {
+          throw new Error("密码至少需要 8 个字符");
+        }
+        if (password.input.value !== confirmation.input.value) {
+          throw new Error("两次输入的密码不一致");
+        }
+        setTransferStatus("正在加密账号备份...");
+        const result = await api("/api/accounts/export", {
+          method: "POST",
+          body: JSON.stringify({
+            accountIds: [...selected],
+            password: password.input.value,
+          }),
+        });
+        downloadTransfer(result, "TRAE-SOLO-CN-accounts.json");
+        showToast(`已导出 ${result.count} 个账号（已加密）`);
+        closeTransferDialog();
+      };
+    } catch (error) {
+      showToast(error.message || String(error), true);
+      closeTransferDialog();
+    }
+  }
+
+  async function openImportDialog(file) {
+    try {
+      if (file.size > 32 * 1024 * 1024) {
+        throw new Error("导入文件过大");
+      }
+      const content = await file.text();
+      const body = openTransferDialog({
+        title: "导入账号",
+        confirmText: "导入",
+      });
+      const fileName = document.createElement("div");
+      fileName.className = "te-transfer-file";
+      fileName.textContent = file.name;
+      const password = createField("密码", { autocomplete: "current-password" });
+      body.append(fileName, password.label);
+      password.input.focus();
+
+      transferSubmit = async () => {
+        if (!password.input.value.trim()) throw new Error("密码不能为空");
+        setTransferStatus("正在解密并校验账号备份...");
+        const result = await api("/api/accounts/import", {
+          method: "POST",
+          body: JSON.stringify({
+            content,
+            password: password.input.value,
+          }),
+        });
+        const detail = result.updated
+          ? `，新增 ${result.imported}，更新 ${result.updated}`
+          : "";
+        showToast(`已导入 ${result.count} 个账号${detail}`);
+        await refresh();
+        closeTransferDialog();
+      };
+    } catch (error) {
+      showToast(error.message || String(error), true);
+      closeTransferDialog();
+    }
+  }
+
   function openPanel() {
     panel.classList.add("open");
     refresh().catch(() => {});
@@ -975,6 +1306,17 @@
   toolbar.querySelector(".te-refresh").addEventListener("click", () => refresh());
   toolbar.querySelector(".te-backup").addEventListener("click", backupCurrent);
   toolbar.querySelector(".te-login-new").addEventListener("click", openLoginChoice);
+  toolbar.querySelector(".te-export-accounts").addEventListener("click", () => {
+    openExportDialog().catch(() => {});
+  });
+  toolbar.querySelector(".te-import-accounts").addEventListener("click", () => {
+    importFileInput.click();
+  });
+  importFileInput.addEventListener("change", () => {
+    const file = importFileInput.files?.[0];
+    importFileInput.value = "";
+    if (file) openImportDialog(file).catch(() => {});
+  });
   list.addEventListener("click", (event) => {
     const button = event.target.closest(".te-acc-switch");
     if (!button?.dataset.accountId) return;
@@ -1020,6 +1362,36 @@
       cancelFakeLogout().catch(() => {});
     } else {
       closeOAuthDialog({ cancel: true });
+    }
+  });
+  transferMask.querySelector(".te-transfer-cancel").addEventListener("click", () => {
+    if (!transferBusy) closeTransferDialog();
+  });
+  transferMask.querySelector(".te-transfer-confirm").addEventListener("click", async () => {
+    if (!transferSubmit || transferBusy) return;
+    transferBusy = true;
+    const confirm = transferMask.querySelector(".te-transfer-confirm");
+    const cancel = transferMask.querySelector(".te-transfer-cancel");
+    confirm.disabled = true;
+    cancel.disabled = true;
+    try {
+      await transferSubmit();
+    } catch (error) {
+      setTransferStatus(error.message || String(error), true);
+    } finally {
+      transferBusy = false;
+      confirm.disabled = false;
+      cancel.disabled = false;
+    }
+  });
+  transferMask.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !transferBusy) {
+      closeTransferDialog();
+      return;
+    }
+    if (event.key === "Enter" && event.target?.tagName === "INPUT") {
+      event.preventDefault();
+      transferMask.querySelector(".te-transfer-confirm").click();
     }
   });
 

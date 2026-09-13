@@ -17,6 +17,8 @@ and keeps all account data on the local machine.
   must be preserved.
 - Switching is transactional: validate, back up, atomically replace, verify, and roll
   back on failure.
+- Account exports must always be encrypted with a user-supplied password. Never write
+  passwords or plaintext authentication snapshots to disk or logs.
 
 ## Safety
 
@@ -34,4 +36,3 @@ and keeps all account data on the local machine.
 - Do not commit until the user has tested and confirmed the feature.
 - Add focused tests for storage validation, account identity, and switch rollback.
 - Run `npm test` and `npm run check` before requesting confirmation.
-

@@ -82,3 +82,28 @@ test("saving a snapshot repairs stale public metadata", async () => {
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 });
+
+test("account snapshots can be exported and imported without duplicates", async () => {
+  const sourceDir = await tempDir();
+  const targetDir = await tempDir();
+  try {
+    const source = new AccountStore(sourceDir);
+    const saved = await source.backupCurrent(storageFixture(), { now: 100 });
+    const exported = await source.exportSnapshots([saved.account.id]);
+    assert.equal(exported.length, 1);
+
+    const target = new AccountStore(targetDir);
+    const first = await target.importSnapshots(exported, { now: 200 });
+    assert.equal(first.imported, 1);
+    assert.equal(first.updated, 0);
+    assert.equal((await target.list()).length, 1);
+
+    const second = await target.importSnapshots(exported, { now: 300 });
+    assert.equal(second.imported, 0);
+    assert.equal(second.updated, 1);
+    assert.equal((await target.list()).length, 1);
+  } finally {
+    await fs.rm(sourceDir, { recursive: true, force: true });
+    await fs.rm(targetDir, { recursive: true, force: true });
+  }
+});
