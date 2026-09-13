@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  applyAuthClear,
   applyAuthSnapshot,
   rollbackAuthSnapshot,
   verifyStorageIdentity,
@@ -52,6 +53,34 @@ test("applies and rolls back an account snapshot transaction", async () => {
       JSON.parse(restored["iCubeAuthInfo://icube.cloudide"]).userId,
       "1111111111111111",
     );
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("fake logout clear removes only managed authentication keys", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "trae-logout-test-"));
+  try {
+    const storagePath = path.join(dir, "storage.json");
+    const transactionDir = path.join(dir, "transactions");
+    const original = rootForUser("1111111111111111");
+    original.windowState = "preserved";
+    original.extensions = ["preserved-extension"];
+    await fs.writeFile(storagePath, JSON.stringify(original), "utf8");
+
+    const transaction = await applyAuthClear({
+      storagePath,
+      transactionDir,
+      now: 200,
+    });
+    const cleared = await readJsonFile(storagePath);
+    assert.equal(cleared.windowState, "preserved");
+    assert.deepEqual(cleared.extensions, ["preserved-extension"]);
+    assert.equal(Object.keys(cleared).some((key) => key.startsWith("iCube")), false);
+    assert.ok(await fs.stat(transaction.beforePath));
+
+    await rollbackAuthSnapshot(storagePath, transaction);
+    assert.equal((await verifyStorageIdentity(storagePath, "1111111111111111")).ok, true);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }

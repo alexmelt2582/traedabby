@@ -47,6 +47,21 @@ test("auth snapshot keeps only iCube authentication keys", () => {
   assert.equal(Object.hasOwn(snapshot.keys, "windowsState"), false);
 });
 
+test("auth snapshot accepts entitlement data embedded in server storage", () => {
+  const source = storageFixture();
+  delete source["iCubeEntitlementInfo://icube.cloudide"];
+  source["iCubeServerData://icube.cloudide"] = JSON.stringify({
+    account: { userId: "1026288307407252" },
+    entitlementInfo: {
+      entitlement_base_info: { user_id: "1026288307407252" },
+    },
+  });
+
+  const snapshot = extractAuthSnapshot(source);
+  assert.equal(Object.hasOwn(snapshot.keys, "iCubeEntitlementInfo://icube.cloudide"), false);
+  assert.equal(snapshot.keys["iCubeServerData://icube.cloudide"].includes("entitlementInfo"), true);
+});
+
 test("auth snapshot validation rejects incomplete states", () => {
   assert.throws(
     () =>

@@ -9,7 +9,17 @@ The first milestone provides:
 - safe backup of the current account authentication snapshot;
 - account listing without exposing authentication tokens.
 
-Account switching and new-account login are implemented in later milestones.
+The account suite also supports:
+
+- one-click switching with a refresh-first, transactional restart flow and automatic
+  rollback when TRAE rejects the selected account;
+- seamless login in the system browser without closing TRAE;
+- traditional fake logout that backs up the current account, keeps non-authentication
+  state, reopens TRAE at the login page, and saves the new account automatically.
+
+Authentication backups are stored locally under `data/accounts`. Only account-scoped
+`iCube*` keys are replaced or cleared; workspaces, settings, extensions, and window
+state are preserved.
 
 ## Development
 
@@ -25,4 +35,3 @@ npm start
 ```
 
 The default local service is `http://127.0.0.1:47834`.
-

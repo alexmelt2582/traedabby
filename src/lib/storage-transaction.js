@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { readJsonFile, writeJsonAtomic } from "./json-file.js";
 import {
+  clearManagedAuthKeys,
   extractAuthSnapshot,
   extractIdentityFromSnapshot,
   mergeAuthSnapshot,
@@ -34,6 +35,29 @@ export async function applyAuthSnapshot({
     beforePath,
     previousRoot: currentRoot,
     mergedRoot: merged,
+  };
+}
+
+export async function applyAuthClear({ storagePath, transactionDir, now = Date.now() }) {
+  const currentRoot = await readJsonFile(storagePath);
+  const transactionId = `${now}-${crypto.randomBytes(6).toString("hex")}`;
+  const directory = path.join(transactionDir, transactionId);
+  const beforePath = path.join(directory, "storage.before.json");
+  await writeJsonAtomic(beforePath, currentRoot, { mode: 0o600 });
+
+  const clearedRoot = clearManagedAuthKeys(currentRoot);
+  try {
+    await writeJsonAtomic(storagePath, clearedRoot, { mode: 0o600 });
+  } catch (error) {
+    await writeJsonAtomic(storagePath, currentRoot, { mode: 0o600 }).catch(() => {});
+    throw error;
+  }
+
+  return {
+    transactionId,
+    beforePath,
+    previousRoot: currentRoot,
+    clearedRoot,
   };
 }
 

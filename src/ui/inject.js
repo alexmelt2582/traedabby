@@ -37,6 +37,8 @@
     #${ROOT_ID} *::before,
     #${ROOT_ID} *::after { box-sizing: border-box; }
 
+    #${ROOT_ID} [hidden] { display: none !important; }
+
     #${ROOT_ID} .te-fab {
       width: 42px;
       height: 42px;
@@ -326,6 +328,55 @@
       line-height: 1.6;
     }
 
+    #${ROOT_ID} .te-login-options {
+      display: grid;
+      gap: 9px;
+      margin-top: 14px;
+    }
+
+    #${ROOT_ID} .te-login-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid var(--te-border);
+      border-radius: 10px;
+      background: var(--te-surface);
+      cursor: pointer;
+    }
+
+    #${ROOT_ID} .te-login-option.selected {
+      border-color: var(--te-accent);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--te-accent) 42%, transparent);
+    }
+
+    #${ROOT_ID} .te-login-option input {
+      width: 16px;
+      height: 16px;
+      flex: 0 0 16px;
+      margin: 2px 0 0;
+      accent-color: var(--te-accent);
+      cursor: pointer;
+    }
+
+    #${ROOT_ID} .te-login-option-copy {
+      min-width: 0;
+    }
+
+    #${ROOT_ID} .te-login-option-title {
+      display: block;
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    #${ROOT_ID} .te-login-option-desc {
+      display: block;
+      margin-top: 4px;
+      color: var(--te-muted);
+      font-size: 11px;
+      line-height: 1.55;
+    }
+
     #${ROOT_ID} .te-modal-actions {
       display: flex;
       justify-content: flex-end;
@@ -416,11 +467,39 @@
   oauthMask.className = "te-modal-mask";
   oauthMask.innerHTML = `
     <div class="te-modal" role="dialog" aria-modal="true" aria-label="登录新账号">
-      <div class="te-modal-title">登录新账号</div>
+      <div class="te-modal-title te-login-progress-title">登录新账号</div>
       <div class="te-modal-status">正在创建授权会话...</div>
       <div class="te-modal-actions">
         <button class="te-secondary te-oauth-reopen" type="button">重新打开</button>
         <button class="te-primary te-oauth-cancel" type="button">取消</button>
+      </div>
+    </div>
+  `;
+
+  const loginChoiceMask = document.createElement("div");
+  loginChoiceMask.className = "te-modal-mask";
+  loginChoiceMask.innerHTML = `
+    <div class="te-modal" role="dialog" aria-modal="true" aria-label="选择登录方式">
+      <div class="te-modal-title">选择登录方式</div>
+      <div class="te-login-options" role="radiogroup" aria-label="登录方式">
+        <label class="te-login-option selected">
+          <input type="radio" name="te-login-way" value="fake_logout" checked>
+          <span class="te-login-option-copy">
+            <span class="te-login-option-title">假退出</span>
+            <span class="te-login-option-desc">安全备份当前账号后重启到登录页，新账号登录后自动加入列表</span>
+          </span>
+        </label>
+        <label class="te-login-option">
+          <input type="radio" name="te-login-way" value="seamless">
+          <span class="te-login-option-copy">
+            <span class="te-login-option-title">无感登录</span>
+            <span class="te-login-option-desc">不退出 TRAE，在浏览器完成授权后新账号自动加入列表</span>
+          </span>
+        </label>
+      </div>
+      <div class="te-modal-actions">
+        <button class="te-secondary te-login-choice-cancel" type="button">取消</button>
+        <button class="te-primary te-login-choice-confirm" type="button">确定</button>
       </div>
     </div>
   `;
@@ -437,13 +516,34 @@
     </svg>
   `;
 
-  root.append(panel, oauthMask, fab);
+  root.append(panel, loginChoiceMask, oauthMask, fab);
   document.body.appendChild(root);
 
   let toastTimer = null;
   let refreshGeneration = 0;
   let oauthSession = null;
   let oauthPollTimer = null;
+  let fakeLogoutSession = null;
+  let fakeLogoutPollTimer = null;
+  let backgroundLoginNoticeShown = false;
+
+  function loginSessionSeen(sessionId) {
+    if (!sessionId) return false;
+    try {
+      return localStorage.getItem(`trae-enhancer:login:${sessionId}`) === "seen";
+    } catch {
+      return false;
+    }
+  }
+
+  function markLoginSessionSeen(sessionId) {
+    if (!sessionId) return;
+    try {
+      localStorage.setItem(`trae-enhancer:login:${sessionId}`, "seen");
+    } catch {
+      // Local storage is optional; the in-memory guard still prevents repeats.
+    }
+  }
 
   function api(path, options = {}) {
     return fetch(`${API_BASE}${path}`, {
@@ -551,7 +651,17 @@
       const status = footer.querySelector(".te-status");
       const dot = footer.querySelector(".te-dot");
       dot.classList.toggle("online", !!health.cdpConnected);
-      status.textContent = health.cdpConnected ? "CDP 已连接" : "等待 CDP";
+      if (
+        fakeLogoutSession &&
+        !["complete", "error", "cancelled"].includes(fakeLogoutSession.status)
+      ) {
+        status.textContent =
+          fakeLogoutSession.status === "awaiting_login"
+            ? "等待新账号登录"
+            : fakeLogoutSession.message || "登录处理中";
+      } else {
+        status.textContent = health.cdpConnected ? "CDP 已连接" : "等待 CDP";
+      }
       header.querySelector(".te-subtitle").textContent = `账号 ${data.accounts.length}`;
       renderAccounts(data.accounts, data.currentAccountId);
     } catch (error) {
@@ -606,15 +716,28 @@
     }
   }
 
-  function setOAuthStatus(message, error = false) {
+  function setLoginStatus(message, error = false) {
     const status = oauthMask.querySelector(".te-modal-status");
     status.textContent = message;
     status.style.color = error ? "#ef4444" : "";
   }
 
+  function showLoginProgress(title, message, { reopen = false } = {}) {
+    oauthMask.querySelector(".te-login-progress-title").textContent = title;
+    oauthMask.querySelector(".te-oauth-reopen").hidden = !reopen;
+    oauthMask.querySelector(".te-oauth-cancel").textContent = "取消";
+    setLoginStatus(message);
+    oauthMask.classList.add("open");
+  }
+
   function stopOAuthPolling() {
     clearTimeout(oauthPollTimer);
     oauthPollTimer = null;
+  }
+
+  function stopFakeLogoutPolling() {
+    clearTimeout(fakeLogoutPollTimer);
+    fakeLogoutPollTimer = null;
   }
 
   function closeOAuthDialog({ cancel = false } = {}) {
@@ -629,6 +752,27 @@
     oauthMask.classList.remove("open");
   }
 
+  function closeLoginChoice() {
+    loginChoiceMask.classList.remove("open");
+  }
+
+  function openLoginChoice() {
+    if (
+      fakeLogoutSession?.sessionId &&
+      !isFakeLogoutTerminal(fakeLogoutSession.status)
+    ) {
+      showLoginProgress("假退出", fakeLogoutMessage(fakeLogoutSession));
+      pollFakeLogout({ showProgress: true }).catch(() => {});
+      return;
+    }
+    const options = loginChoiceMask.querySelectorAll(".te-login-option");
+    for (const option of options) {
+      const input = option.querySelector("input");
+      option.classList.toggle("selected", !!input?.checked);
+    }
+    loginChoiceMask.classList.add("open");
+  }
+
   async function pollOAuthStatus() {
     if (!oauthSession?.loginId) return;
     try {
@@ -636,16 +780,16 @@
         `/api/oauth/status?loginId=${encodeURIComponent(oauthSession.loginId)}`,
       );
       if (result.status === "pending") {
-        setOAuthStatus("请在浏览器中完成扫码或账号授权，完成后会自动加入账号列表。");
+        setLoginStatus("请在浏览器中完成扫码或账号授权，完成后会自动加入账号列表。");
       } else if (result.status === "exchanging") {
-        setOAuthStatus("授权已收到，正在交换登录凭据并保存账号...");
+        setLoginStatus("授权已收到，正在交换登录凭据并保存账号...");
       } else if (result.status === "complete") {
-        setOAuthStatus("账号已加入列表，当前登录账号不会被切换。");
+        setLoginStatus("账号已加入列表，当前登录账号不会被切换。");
         await refresh();
         setTimeout(() => closeOAuthDialog(), 1200);
         return;
       } else if (result.status === "error") {
-        setOAuthStatus(result.error || "登录失败", true);
+        setLoginStatus(result.error || "登录失败", true);
         return;
       } else if (result.status === "cancelled") {
         closeOAuthDialog();
@@ -653,15 +797,14 @@
       }
       oauthPollTimer = setTimeout(pollOAuthStatus, 1000);
     } catch (error) {
-      setOAuthStatus(error.message || String(error), true);
+      setLoginStatus(error.message || String(error), true);
     }
   }
 
   async function startOAuth() {
     const button = toolbar.querySelector(".te-login-new");
     button.disabled = true;
-    oauthMask.classList.add("open");
-    setOAuthStatus("正在创建授权会话...");
+    showLoginProgress("无感登录", "正在创建授权会话...", { reopen: true });
     try {
       const result = await api("/api/oauth/start", {
         method: "POST",
@@ -669,15 +812,149 @@
       });
       oauthSession = result;
       if (result.browserOpened) {
-        setOAuthStatus("请在浏览器中完成扫码或账号授权，完成后会自动加入账号列表。");
+        setLoginStatus("请在浏览器中完成扫码或账号授权，完成后会自动加入账号列表。");
       } else {
-        setOAuthStatus(result.browserError || "浏览器未能自动打开，请点击“重新打开”。", true);
+        setLoginStatus(result.browserError || "浏览器未能自动打开，请点击“重新打开”。", true);
       }
       oauthPollTimer = setTimeout(pollOAuthStatus, 800);
     } catch (error) {
-      setOAuthStatus(error.message || String(error), true);
+      setLoginStatus(error.message || String(error), true);
     } finally {
       button.disabled = false;
+    }
+  }
+
+  function fakeLogoutMessage(result) {
+    if (result.message) return result.message;
+    const messages = {
+      preparing: "正在备份当前账号...",
+      stopping: "正在安全关闭 TRAE SOLO CN...",
+      clearing: "正在切换到登录页...",
+      starting: "正在重新打开 TRAE 登录页...",
+      awaiting_login: "请在 TRAE 登录页扫码登录新账号，登录后会自动保存。",
+      cancelling: "正在取消并恢复原账号...",
+      restoring: "正在恢复原账号并重新打开 TRAE...",
+      complete: "新账号已加入列表。",
+      cancelled: "已取消，原账号已恢复。",
+      error: result.error || "登录流程失败",
+    };
+    return messages[result.status] || "正在处理登录流程...";
+  }
+
+  function isFakeLogoutTerminal(status) {
+    return status === "complete" || status === "error" || status === "cancelled";
+  }
+
+  async function pollFakeLogout({ showProgress = false } = {}) {
+    if (!fakeLogoutSession?.sessionId) return;
+    try {
+      const result = await api(
+        `/api/fake-logout/status?sessionId=${encodeURIComponent(fakeLogoutSession.sessionId)}`,
+      );
+      fakeLogoutSession = result;
+      const message = fakeLogoutMessage(result);
+      if (showProgress) setLoginStatus(message, result.status === "error");
+
+      if (result.status === "complete") {
+        stopFakeLogoutPolling();
+        markLoginSessionSeen(result.sessionId);
+        showToast(message);
+        await refresh();
+        if (showProgress) setTimeout(() => closeOAuthDialog(), 1200);
+        setTimeout(() => {
+          fakeLogoutSession = null;
+          refresh().catch(() => {});
+        }, 1400);
+        return;
+      }
+      if (isFakeLogoutTerminal(result.status)) {
+        stopFakeLogoutPolling();
+        markLoginSessionSeen(result.sessionId);
+        showToast(message, result.status === "error");
+        await refresh();
+        if (showProgress) {
+          setLoginStatus(message, result.status === "error");
+        }
+        return;
+      }
+      fakeLogoutPollTimer = setTimeout(
+        () => pollFakeLogout({ showProgress }),
+        1000,
+      );
+    } catch (error) {
+      if (showProgress) setLoginStatus(error.message || String(error), true);
+      fakeLogoutPollTimer = setTimeout(
+        () => pollFakeLogout({ showProgress }),
+        2000,
+      );
+    }
+  }
+
+  async function startFakeLogout() {
+    const button = toolbar.querySelector(".te-login-new");
+    button.disabled = true;
+    showLoginProgress("假退出", "正在备份当前账号并准备重启 TRAE...");
+    try {
+      const result = await api("/api/fake-logout/start", {
+        method: "POST",
+        body: "{}",
+      });
+      fakeLogoutSession = result;
+      setLoginStatus(fakeLogoutMessage(result));
+      stopFakeLogoutPolling();
+      fakeLogoutPollTimer = setTimeout(
+        () => pollFakeLogout({ showProgress: true }),
+        800,
+      );
+    } catch (error) {
+      setLoginStatus(error.message || String(error), true);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function cancelFakeLogout() {
+    if (!fakeLogoutSession?.sessionId) return;
+    setLoginStatus("正在取消并恢复原账号...");
+    try {
+      await api("/api/fake-logout/cancel", {
+        method: "POST",
+        body: JSON.stringify({ sessionId: fakeLogoutSession.sessionId }),
+      });
+      fakeLogoutSession.status = "cancelling";
+      fakeLogoutSession.message = "正在取消并恢复原账号...";
+      stopFakeLogoutPolling();
+      fakeLogoutPollTimer = setTimeout(
+        () => pollFakeLogout({ showProgress: true }),
+        500,
+      );
+    } catch (error) {
+      setLoginStatus(error.message || String(error), true);
+    }
+  }
+
+  async function resumeFakeLogout() {
+    try {
+      const result = await api("/api/fake-logout/active");
+      if (result.status === "missing") return;
+      if (isFakeLogoutTerminal(result.status) && loginSessionSeen(result.sessionId)) {
+        return;
+      }
+      fakeLogoutSession = result;
+      if (
+        !backgroundLoginNoticeShown &&
+        !["complete", "error", "cancelled"].includes(result.status)
+      ) {
+        backgroundLoginNoticeShown = true;
+        showToast("假退出登录进行中：请在 TRAE 登录页扫码");
+      }
+      stopFakeLogoutPolling();
+      fakeLogoutPollTimer = setTimeout(
+        () => pollFakeLogout({ showProgress: false }),
+        600,
+      );
+    } catch {
+      // The daemon may still be starting after TRAE restarts.
     }
   }
 
@@ -697,11 +974,32 @@
   header.querySelector(".te-close").addEventListener("click", closePanel);
   toolbar.querySelector(".te-refresh").addEventListener("click", () => refresh());
   toolbar.querySelector(".te-backup").addEventListener("click", backupCurrent);
-  toolbar.querySelector(".te-login-new").addEventListener("click", startOAuth);
+  toolbar.querySelector(".te-login-new").addEventListener("click", openLoginChoice);
   list.addEventListener("click", (event) => {
     const button = event.target.closest(".te-acc-switch");
     if (!button?.dataset.accountId) return;
     switchAccount(button, button.dataset.accountId).catch(() => {});
+  });
+  loginChoiceMask.querySelectorAll(".te-login-option").forEach((option) => {
+    option.querySelector("input")?.addEventListener("change", () => {
+      loginChoiceMask.querySelectorAll(".te-login-option").forEach((candidate) => {
+        candidate.classList.toggle(
+          "selected",
+          !!candidate.querySelector("input")?.checked,
+        );
+      });
+    });
+  });
+  loginChoiceMask.querySelector(".te-login-choice-cancel").addEventListener("click", closeLoginChoice);
+  loginChoiceMask.querySelector(".te-login-choice-confirm").addEventListener("click", () => {
+    const selected = loginChoiceMask.querySelector('input[name="te-login-way"]:checked');
+    if (!selected) return;
+    closeLoginChoice();
+    if (selected.value === "seamless") {
+      startOAuth().catch(() => {});
+    } else {
+      startFakeLogout().catch(() => {});
+    }
   });
   oauthMask.querySelector(".te-oauth-reopen").addEventListener("click", () => {
     if (!oauthSession?.loginId) return;
@@ -710,19 +1008,29 @@
       body: JSON.stringify({ loginId: oauthSession.loginId }),
     })
       .then((result) => {
-        if (!result.opened) setOAuthStatus("浏览器未能打开，请稍后重试。", true);
+        if (!result.opened) setLoginStatus("浏览器未能打开，请稍后重试。", true);
       })
-      .catch((error) => setOAuthStatus(error.message || String(error), true));
+      .catch((error) => setLoginStatus(error.message || String(error), true));
   });
   oauthMask.querySelector(".te-oauth-cancel").addEventListener("click", () => {
-    closeOAuthDialog({ cancel: true });
+    if (
+      fakeLogoutSession?.sessionId &&
+      !isFakeLogoutTerminal(fakeLogoutSession.status)
+    ) {
+      cancelFakeLogout().catch(() => {});
+    } else {
+      closeOAuthDialog({ cancel: true });
+    }
   });
 
   window.__traeEnhancerCleanup = () => {
     clearTimeout(toastTimer);
     stopOAuthPolling();
+    stopFakeLogoutPolling();
     root.remove();
     style.remove();
     delete window.__traeEnhancerCleanup;
   };
+
+  resumeFakeLogout().catch(() => {});
 })();

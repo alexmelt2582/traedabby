@@ -19,6 +19,7 @@ import {
 import { AccountStore } from "./lib/accounts.js";
 import { readJsonFile, readTextFile, writeTextAtomic } from "./lib/json-file.js";
 import { normalizeAuthSnapshotForInjection } from "./lib/trae-storage.js";
+import { TraeFakeLogoutManager } from "./lib/trae-fake-logout.js";
 import { refreshAuthSnapshot } from "./lib/trae-refresh.js";
 import {
   findTraeProcessIds,
@@ -165,7 +166,7 @@ async function switchAccount(accountId) {
   }
 }
 
-async function route(request, response, apiToken, cdpClient, oauthManager) {
+async function route(request, response, apiToken, cdpClient, oauthManager, fakeLogoutManager) {
   const requestUrl = new URL(request.url || "/", `http://${LOOPBACK_HOST}:${UI_PORT}`);
   const pathname = requestUrl.pathname;
 
@@ -225,6 +226,13 @@ async function route(request, response, apiToken, cdpClient, oauthManager) {
       jsonResponse(response, 409, { ok: false, error: "An account switch is already running" });
       return;
     }
+    if (fakeLogoutManager.isActive()) {
+      jsonResponse(response, 409, {
+        ok: false,
+        error: "A fake logout login flow is already running",
+      });
+      return;
+    }
     const body = await readRequestBody(request);
     switchInFlight = switchAccount(String(body.accountId || ""));
     try {
@@ -236,7 +244,47 @@ async function route(request, response, apiToken, cdpClient, oauthManager) {
     return;
   }
 
+  if (request.method === "POST" && pathname === "/api/fake-logout/start") {
+    if (switchInFlight) {
+      jsonResponse(response, 409, { ok: false, error: "An account switch is already running" });
+      return;
+    }
+    const result = await fakeLogoutManager.start();
+    jsonResponse(response, 200, { ok: true, ...result });
+    return;
+  }
+
+  if (request.method === "GET" && pathname === "/api/fake-logout/status") {
+    const sessionId = requestUrl.searchParams.get("sessionId") || "";
+    const status = fakeLogoutManager.status(sessionId);
+    jsonResponse(response, status.status === "missing" ? 404 : 200, {
+      ok: status.status !== "missing",
+      ...status,
+    });
+    return;
+  }
+
+  if (request.method === "GET" && pathname === "/api/fake-logout/active") {
+    const status = fakeLogoutManager.active();
+    jsonResponse(response, 200, { ok: true, ...status });
+    return;
+  }
+
+  if (request.method === "POST" && pathname === "/api/fake-logout/cancel") {
+    const body = await readRequestBody(request);
+    const cancelled = fakeLogoutManager.cancel(String(body.sessionId || ""));
+    jsonResponse(response, 200, { ok: true, cancelled });
+    return;
+  }
+
   if (request.method === "POST" && pathname === "/api/oauth/start") {
+    if (fakeLogoutManager.isActive()) {
+      jsonResponse(response, 409, {
+        ok: false,
+        error: "A fake logout login flow is already running",
+      });
+      return;
+    }
     const result = await oauthManager.start();
     jsonResponse(response, 200, { ok: true, ...result });
     return;
@@ -294,10 +342,25 @@ async function main() {
     exePath: process.env.TRAE_ENHANCER_TRAE_EXE || DEFAULT_TRAE_EXE,
     openBrowser: process.env.TRAE_ENHANCER_OPEN_BROWSER !== "0",
   });
+  const fakeLogoutManager = new TraeFakeLogoutManager({
+    accountStore,
+    storagePath: STORAGE_PATH,
+    transactionDir: TRANSACTION_DIR,
+    stopTrae: stopTraeForSwitch,
+    startTrae: startTraeForSwitch,
+    getLiveIdentity: () => cdpClient.getLiveIdentity(),
+  });
   cdpClient.start();
 
   const server = http.createServer((request, response) => {
-    route(request, response, apiToken, cdpClient, oauthManager).catch((error) => {
+    route(
+      request,
+      response,
+      apiToken,
+      cdpClient,
+      oauthManager,
+      fakeLogoutManager,
+    ).catch((error) => {
       jsonResponse(response, 500, {
         ok: false,
         error: error instanceof Error ? error.message : String(error),

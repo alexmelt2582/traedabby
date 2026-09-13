@@ -41,6 +41,21 @@ function parseJsonString(value) {
   }
 }
 
+function containsNormalizedKey(value, expectedKey, depth = 0) {
+  if (depth > 10 || value === null || value === undefined) return false;
+  const parsed = parseJsonString(value);
+  if (parsed !== value) return containsNormalizedKey(parsed, expectedKey, depth + 1);
+  if (Array.isArray(value)) {
+    return value.some((item) => containsNormalizedKey(item, expectedKey, depth + 1));
+  }
+  if (!isObject(value)) return false;
+  for (const [key, child] of Object.entries(value)) {
+    if (normalizeKey(key) === expectedKey) return true;
+    if (containsNormalizedKey(child, expectedKey, depth + 1)) return true;
+  }
+  return false;
+}
+
 function isDeviceKey(key) {
   return key.startsWith(DEVICE_PREFIX);
 }
@@ -92,6 +107,17 @@ export function mergeAuthSnapshot(storageRoot, snapshot) {
   }
   Object.assign(merged, structuredClone(snapshot.keys));
   return merged;
+}
+
+export function clearManagedAuthKeys(storageRoot) {
+  if (!isObject(storageRoot)) {
+    throw new Error("TRAE storage.json must contain a JSON object");
+  }
+  const cleared = structuredClone(storageRoot);
+  for (const key of Object.keys(cleared)) {
+    if (isManagedAuthKey(key)) delete cleared[key];
+  }
+  return cleared;
 }
 
 function normalizeIsoTimestamp(value, fallback) {
@@ -174,14 +200,19 @@ export function validateAuthSnapshot(snapshot) {
   const hasUserAuth = keys.some(isUserAuthKey);
   const hasDevice = keys.some(isDeviceKey);
   const hasServer = keys.some((key) => key.startsWith(SERVER_PREFIX));
-  const hasEntitlement = keys.some((key) => key.startsWith(ENTITLEMENT_PREFIX));
+  const hasStandaloneEntitlement = keys.some((key) => key.startsWith(ENTITLEMENT_PREFIX));
+  const hasEmbeddedEntitlement = keys
+    .filter((key) => key.startsWith(SERVER_PREFIX))
+    .some((key) => containsNormalizedKey(snapshot.keys[key], "entitlementinfo"));
   const hasUsertag = Object.hasOwn(snapshot.keys, USERTAG_KEY);
 
   const missing = [];
   if (!hasUserAuth) missing.push("user authentication");
   if (!hasDevice) missing.push("device key");
   if (!hasServer) missing.push("server data");
-  if (!hasEntitlement) missing.push("entitlement data");
+  if (!hasStandaloneEntitlement && !hasEmbeddedEntitlement) {
+    missing.push("entitlement data");
+  }
   if (!hasUsertag) missing.push("usertag");
   if (missing.length) {
     throw new Error(`Incomplete TRAE authentication state: missing ${missing.join(", ")}`);
