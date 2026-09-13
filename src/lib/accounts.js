@@ -42,7 +42,12 @@ function publicAccount(record) {
     userId: record.userId,
     maskedUserId: maskAccountValue(record.userId),
     maskedEmail: maskAccountValue(record.email),
+    phone: record.phone || null,
+    maskedPhone: record.phone?.includes("*")
+      ? record.phone
+      : maskAccountValue(record.phone),
     nickname: record.nickname,
+    insights: record.insights || null,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     snapshotCapturedAt: record.snapshotCapturedAt,
@@ -62,6 +67,7 @@ function buildAccountRecord(identity, existing, snapshot, now) {
     phone: identity.phone,
     nickname: identity.nickname,
     displayName: safeDisplayName(identity),
+    insights: existing?.insights || null,
     createdAt: existing?.createdAt || now,
     updatedAt: now,
     snapshotCapturedAt: Number.isFinite(Number(snapshot.capturedAt))
@@ -219,6 +225,21 @@ export class AccountStore {
       }),
       updatedAt: now,
       snapshotCapturedAt: snapshot.capturedAt,
+    };
+    await writeJsonAtomic(this.indexPath, index, { mode: 0o600 });
+    return publicAccount(index.accounts[position]);
+  }
+
+  async saveInsights(accountId, insights, { now = Date.now() } = {}) {
+    const index = await this.readIndex();
+    const position = index.accounts.findIndex((record) => record.id === accountId);
+    if (position < 0) throw new Error("Account backup was not found");
+    index.accounts[position] = {
+      ...index.accounts[position],
+      insights: {
+        ...(insights || {}),
+        updatedAt: (insights || {}).updatedAt || new Date(now).toISOString(),
+      },
     };
     await writeJsonAtomic(this.indexPath, index, { mode: 0o600 });
     return publicAccount(index.accounts[position]);

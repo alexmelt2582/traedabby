@@ -125,3 +125,25 @@ test("repairIndex removes sentinel email values", async () => {
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 });
+
+test("account insights and phone metadata are exposed without touching snapshots", async () => {
+  const dataDir = await tempDir();
+  try {
+    const store = new AccountStore(dataDir);
+    const saved = await store.backupCurrent(storageFixture(), { now: 100 });
+    const updated = await store.saveInsights(
+      saved.account.id,
+      {
+        plan: "Free",
+        quota: { model: "fast_request", fastAvailable: 0 },
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      { now: 200 },
+    );
+    assert.equal(updated.insights.plan, "Free");
+    const snapshot = await store.readSnapshot(saved.account.id);
+    assert.equal(Object.hasOwn(snapshot, "insights"), false);
+  } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});

@@ -24,7 +24,10 @@ import {
 } from "./lib/secure-transfer.js";
 import { normalizeAuthSnapshotForInjection } from "./lib/trae-storage.js";
 import { TraeFakeLogoutManager } from "./lib/trae-fake-logout.js";
-import { refreshAuthSnapshot } from "./lib/trae-refresh.js";
+import {
+  refreshAccountInsights,
+  refreshAuthSnapshot,
+} from "./lib/trae-refresh.js";
 import {
   findTraeProcessIds,
   startTraeWithCdp,
@@ -54,6 +57,7 @@ const accountStore = new AccountStore(DATA_DIR);
 let cdpConnected = false;
 let switchInFlight = null;
 let loginStartInFlight = null;
+let insightsRefreshInFlight = null;
 
 async function getApiToken() {
   const existing = await readTextFile(API_TOKEN_PATH, { required: false });
@@ -67,7 +71,8 @@ async function buildInjectScript(apiToken) {
   const source = await readTextFile(path.join(import.meta.dirname, "ui", "inject.js"));
   return source
     .replaceAll("__API_BASE__", `http://${LOOPBACK_HOST}:${UI_PORT}`)
-    .replaceAll("__API_TOKEN__", apiToken);
+    .replaceAll("__API_TOKEN__", apiToken)
+    .replaceAll("__APP_VERSION__", APP_VERSION);
 }
 
 function jsonResponse(response, status, body) {
@@ -173,6 +178,46 @@ async function switchAccount(accountId) {
   }
 }
 
+async function refreshAccountsInsights(accountIds = null) {
+  const accounts = await accountStore.list();
+  const requested = accountIds ? new Set(accountIds.map(String)) : null;
+  const selected = requested
+    ? accounts.filter((account) => requested.has(account.id))
+    : accounts;
+  if (requested && selected.length !== requested.size) {
+    throw new Error("One or more selected account backups were not found");
+  }
+  if (!selected.length) throw new Error("没有可刷新的账号");
+
+  const results = [];
+  for (const account of selected) {
+    try {
+      const snapshot = await accountStore.readSnapshot(account.id);
+      const refreshed = await refreshAccountInsights(snapshot);
+      if (refreshed.refreshedToken) {
+        await accountStore.saveSnapshot(account.id, refreshed.snapshot);
+      }
+      const saved = await accountStore.saveInsights(account.id, refreshed.insights);
+      results.push({ id: account.id, ok: true, account: saved });
+    } catch (error) {
+      const message = error.message || String(error);
+      const saved = await accountStore.saveInsights(account.id, {
+        ...(account.insights || {}),
+        error: message,
+        updatedAt: new Date().toISOString(),
+      });
+      results.push({ id: account.id, ok: false, error: message, account: saved });
+    }
+  }
+
+  return {
+    total: results.length,
+    updated: results.filter((result) => result.ok).length,
+    failed: results.filter((result) => !result.ok).length,
+    results,
+  };
+}
+
 async function route(request, response, apiToken, cdpClient, oauthManager, fakeLogoutManager) {
   const requestUrl = new URL(request.url || "/", `http://${LOOPBACK_HOST}:${UI_PORT}`);
   const pathname = requestUrl.pathname;
@@ -260,6 +305,36 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
       total: result.total,
       count: result.imported + result.updated,
     });
+    return;
+  }
+
+  if (request.method === "POST" && pathname === "/api/accounts/insights/refresh") {
+    if (switchInFlight) {
+      jsonResponse(response, 409, { ok: false, error: "An account switch is already running" });
+      return;
+    }
+    if (fakeLogoutManager.isActive()) {
+      jsonResponse(response, 409, {
+        ok: false,
+        error: "A fake logout login flow is already running",
+      });
+      return;
+    }
+    if (insightsRefreshInFlight) {
+      jsonResponse(response, 409, { ok: false, error: "Account insights are already refreshing" });
+      return;
+    }
+    const body = await readRequestBody(request);
+    const accountIds = Array.isArray(body.accountIds)
+      ? body.accountIds.map((value) => String(value || "").trim()).filter(Boolean)
+      : null;
+    insightsRefreshInFlight = refreshAccountsInsights(accountIds);
+    try {
+      const result = await insightsRefreshInFlight;
+      jsonResponse(response, 200, { ok: true, ...result });
+    } finally {
+      insightsRefreshInFlight = null;
+    }
     return;
   }
 

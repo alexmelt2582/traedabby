@@ -5,6 +5,7 @@
   const STYLE_ID = "trae-enhancer-style";
   const API_BASE = "__API_BASE__";
   const API_TOKEN = "__API_TOKEN__";
+  const APP_VERSION = "__APP_VERSION__";
 
   window.__traeEnhancerCleanup?.();
   document.getElementById(ROOT_ID)?.remove();
@@ -66,8 +67,8 @@
       position: absolute;
       right: 0;
       bottom: 50px;
-      width: min(440px, calc(100vw - 24px));
-      max-height: min(640px, calc(100vh - 84px));
+      width: min(460px, calc(100vw - 24px));
+      height: min(700px, calc(100vh - 84px));
       display: none;
       flex-direction: column;
       overflow: hidden;
@@ -131,11 +132,184 @@
       padding: 12px;
     }
 
+    #${ROOT_ID} .te-tabs {
+      display: flex;
+      gap: 6px;
+      padding: 9px 12px 0;
+      border-bottom: 1px solid var(--te-border);
+      flex: 0 0 auto;
+    }
+
+    #${ROOT_ID} .te-tab {
+      min-width: 88px;
+      height: 34px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 0 12px;
+      border: 0;
+      border-radius: 9px 9px 0 0;
+      color: var(--te-muted);
+      background: transparent;
+      font: inherit;
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    #${ROOT_ID} .te-tab:hover {
+      color: var(--te-text);
+      background: var(--te-surface-hover);
+    }
+
+    #${ROOT_ID} .te-tab.active {
+      color: var(--te-accent-fg);
+      background: var(--te-accent);
+    }
+
+    #${ROOT_ID} .te-content {
+      min-height: 0;
+      overflow: hidden;
+      flex: 1 1 auto;
+    }
+
+    #${ROOT_ID} .te-pane {
+      display: none;
+      height: 100%;
+      min-height: 0;
+    }
+
+    #${ROOT_ID} .te-pane.active {
+      display: flex;
+      flex-direction: column;
+    }
+
+    #${ROOT_ID} .te-pane[data-pane="about"] {
+      overflow: auto;
+      padding: 12px;
+    }
+
+    #${ROOT_ID} .te-about {
+      display: grid;
+      gap: 14px;
+    }
+
+    #${ROOT_ID} .te-about-hero {
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+      padding: 14px;
+      border: 1px solid var(--te-border);
+      border-radius: 11px;
+      background: var(--te-surface);
+    }
+
+    #${ROOT_ID} .te-about-icon {
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      border-radius: 11px;
+      color: var(--te-accent-fg);
+      background: var(--te-accent);
+    }
+
+    #${ROOT_ID} .te-about-name {
+      font-size: 15px;
+      font-weight: 750;
+    }
+
+    #${ROOT_ID} .te-about-summary {
+      margin-top: 4px;
+      color: var(--te-muted);
+      font-size: 11px;
+      line-height: 1.55;
+    }
+
+    #${ROOT_ID} .te-about-version {
+      display: inline-flex;
+      margin-top: 7px;
+      padding: 3px 7px;
+      border-radius: 999px;
+      color: var(--te-accent);
+      background: color-mix(in srgb, var(--te-accent) 12%, transparent);
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    #${ROOT_ID} .te-feature-list {
+      display: grid;
+      gap: 7px;
+    }
+
+    #${ROOT_ID} .te-feature {
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+      padding: 9px 10px;
+      border: 1px solid var(--te-border);
+      border-radius: 9px;
+      background: var(--te-surface);
+    }
+
+    #${ROOT_ID} .te-feature-icon {
+      width: 22px;
+      height: 22px;
+      display: grid;
+      place-items: center;
+      border-radius: 7px;
+      color: var(--te-accent);
+      background: color-mix(in srgb, var(--te-accent) 10%, transparent);
+    }
+
+    #${ROOT_ID} .te-feature-title {
+      display: block;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    #${ROOT_ID} .te-feature-desc {
+      display: block;
+      margin-top: 2px;
+      color: var(--te-muted);
+      font-size: 10.5px;
+      line-height: 1.45;
+    }
+
     #${ROOT_ID} .te-toolbar {
       display: flex;
       align-items: center;
       gap: 8px;
-      margin-bottom: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--te-border);
+      background: color-mix(in srgb, var(--te-surface) 58%, transparent);
+      flex: 0 0 auto;
+    }
+
+    #${ROOT_ID} .te-toolbar-summary {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--te-muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    #${ROOT_ID} .te-toolbar-stat strong {
+      margin-left: 3px;
+      color: var(--te-text);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #${ROOT_ID} .te-toolbar-actions {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
 
     #${ROOT_ID} .te-primary,
@@ -164,8 +338,6 @@
       background: var(--te-surface);
     }
 
-    #${ROOT_ID} .te-refresh { margin-left: auto; }
-
     #${ROOT_ID} .te-account-io {
       width: 32px;
       padding: 0;
@@ -182,35 +354,39 @@
     }
 
     #${ROOT_ID} .te-list {
+      min-height: 0;
       display: grid;
       gap: 8px;
+      overflow: auto;
+      padding: 10px 12px;
+      flex: 1 1 auto;
+      align-content: start;
     }
 
     #${ROOT_ID} .te-card {
-      min-height: 68px;
-      display: grid;
-      grid-template-columns: 34px minmax(0, 1fr) auto auto;
-      align-items: center;
-      gap: 10px;
-      padding: 10px;
+      display: block;
+      padding: 12px;
       border: 1px solid var(--te-border);
       border-radius: 10px;
       background: var(--te-surface);
     }
 
-    #${ROOT_ID} .te-avatar {
-      width: 34px;
-      height: 34px;
-      display: grid;
-      place-items: center;
-      border-radius: 9px;
-      color: var(--te-accent-fg);
-      background: var(--te-accent);
-      font-weight: 700;
-      user-select: none;
+    #${ROOT_ID} .te-card.current {
+      border-color: color-mix(in srgb, #22a06b 42%, var(--te-border));
+      box-shadow: inset 3px 0 0 #22a06b;
     }
 
-    #${ROOT_ID} .te-account-main { min-width: 0; }
+    #${ROOT_ID} .te-account-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    #${ROOT_ID} .te-account-main {
+      min-width: 0;
+      flex: 1 1 auto;
+    }
 
     #${ROOT_ID} .te-name {
       overflow: hidden;
@@ -220,20 +396,72 @@
       font-weight: 650;
     }
 
-    #${ROOT_ID} .te-meta {
-      margin-top: 4px;
+    #${ROOT_ID} .te-account-ops {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex: 0 0 auto;
+    }
+
+    #${ROOT_ID} .te-meta-row {
+      display: flex;
+      align-items: center;
+      gap: 13px;
+      min-width: 0;
+      margin-top: 8px;
+      color: var(--te-muted);
+      font-size: 10.5px;
+    }
+
+    #${ROOT_ID} .te-meta-item {
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    #${ROOT_ID} .te-meta-label {
+      color: var(--te-muted);
+      flex: 0 0 auto;
+    }
+
+    #${ROOT_ID} .te-meta-value {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      color: var(--te-muted);
-      font-size: 11px;
+      color: var(--te-text);
+      font-weight: 600;
     }
 
-    #${ROOT_ID} .te-time {
-      max-width: 92px;
+    #${ROOT_ID} .te-credit-block {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      margin-top: 9px;
+      padding-top: 9px;
+      border-top: 1px solid color-mix(in srgb, var(--te-border) 80%, transparent);
+    }
+
+    #${ROOT_ID} .te-credit-label {
       color: var(--te-muted);
       font-size: 10px;
-      text-align: right;
+    }
+
+    #${ROOT_ID} .te-credit-value {
+      color: var(--te-accent);
+      font-size: 15px;
+      font-weight: 750;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #${ROOT_ID} .te-credit-detail {
+      min-width: 0;
+      margin-left: auto;
+      overflow: hidden;
+      color: var(--te-muted);
+      font-size: 10px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     #${ROOT_ID} .te-current {
@@ -533,49 +761,116 @@
     </button>
   `;
 
-  const body = document.createElement("div");
-  body.className = "te-body";
+  const tabs = document.createElement("div");
+  tabs.className = "te-tabs";
+  tabs.innerHTML = `
+    <button class="te-tab active" type="button" data-tab="account">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+        <circle cx="12" cy="7" r="4"/>
+      </svg>
+      <span>账号</span>
+    </button>
+    <button class="te-tab" type="button" data-tab="about">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/>
+        <path d="M12 16v-4M12 8h.01"/>
+      </svg>
+      <span>关于</span>
+    </button>
+  `;
+
+  const content = document.createElement("div");
+  content.className = "te-content";
+
+  const accountPane = document.createElement("div");
+  accountPane.className = "te-pane active";
+  accountPane.dataset.pane = "account";
 
   const toolbar = document.createElement("div");
   toolbar.className = "te-toolbar";
   toolbar.innerHTML = `
-    <button class="te-primary te-backup" type="button">
-      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-        <path d="M17 21v-8H7v8M7 3v5h8"/>
-      </svg>
-      <span>备份当前账号</span>
-    </button>
-    <button class="te-secondary te-login-new" type="button">
-      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="10" cy="8" r="4"/>
-        <path d="M2 21a8 8 0 0 1 16 0M19 8v6M16 11h6"/>
-      </svg>
-      <span>登录新账号</span>
-    </button>
-    <button class="te-secondary te-account-io te-export-accounts" type="button" title="导出账号" aria-label="导出账号">
-      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 3v12M7 10l5 5 5-5"/>
-        <path d="M5 21h14"/>
-      </svg>
-    </button>
-    <button class="te-secondary te-account-io te-import-accounts" type="button" title="导入账号" aria-label="导入账号">
-      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 17V5M7 10l5-5 5 5"/>
-        <path d="M5 21h14"/>
-      </svg>
-    </button>
-    <button class="te-secondary te-refresh" type="button" title="刷新" aria-label="刷新">
-      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/>
-      </svg>
-    </button>
+    <div class="te-toolbar-summary">
+      <span class="te-toolbar-stat">账号数 <strong class="te-account-count">0</strong></span>
+      <span class="te-toolbar-stat">总余额 <strong class="te-total-credit">--</strong></span>
+    </div>
+    <div class="te-toolbar-actions">
+      <button class="te-primary te-login-new" type="button">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="10" cy="8" r="4"/>
+          <path d="M2 21a8 8 0 0 1 16 0M19 8v6M16 11h6"/>
+        </svg>
+        <span>登录</span>
+      </button>
+      <button class="te-secondary te-account-io te-export-accounts" type="button" title="导出账号" aria-label="导出账号">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3v12M7 10l5 5 5-5"/>
+          <path d="M5 21h14"/>
+        </svg>
+      </button>
+      <button class="te-secondary te-account-io te-import-accounts" type="button" title="导入账号" aria-label="导入账号">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 17V5M7 10l5-5 5 5"/>
+          <path d="M5 21h14"/>
+        </svg>
+      </button>
+      <button class="te-secondary te-account-io te-refresh" type="button" title="刷新" aria-label="刷新">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/>
+        </svg>
+      </button>
+    </div>
   `;
 
   const list = document.createElement("div");
   list.className = "te-list";
 
-  body.append(toolbar, list);
+  accountPane.append(toolbar, list);
+
+  const aboutPane = document.createElement("div");
+  aboutPane.className = "te-pane";
+  aboutPane.dataset.pane = "about";
+  aboutPane.innerHTML = `
+    <div class="te-about">
+      <div class="te-about-hero">
+        <div class="te-about-icon">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4" y="7" width="16" height="12" rx="3"/>
+            <path d="M9 12h.01M15 12h.01M9 16h6M12 7V4M9 4h6"/>
+          </svg>
+        </div>
+        <div>
+          <div class="te-about-name">TRAE SOLO CN Enhancer</div>
+          <div class="te-about-summary">本地运行的多账号增强助手，通过 CDP 与本机 Trae 交互，不上传账号数据。</div>
+          <span class="te-about-version">v${APP_VERSION}</span>
+        </div>
+      </div>
+      <div class="te-feature-list">
+        <div class="te-feature">
+          <span class="te-feature-icon">1</span>
+          <span><span class="te-feature-title">多账号管理</span><span class="te-feature-desc">自动备份、独立保存并一键切换账号。</span></span>
+        </div>
+        <div class="te-feature">
+          <span class="te-feature-icon">2</span>
+          <span><span class="te-feature-title">两种登录方式</span><span class="te-feature-desc">支持无感 OAuth 和传统假退出登录。</span></span>
+        </div>
+        <div class="te-feature">
+          <span class="te-feature-icon">3</span>
+          <span><span class="te-feature-title">账号总览</span><span class="te-feature-desc">集中查看手机号、套餐和剩余额度。</span></span>
+        </div>
+        <div class="te-feature">
+          <span class="te-feature-icon">4</span>
+          <span><span class="te-feature-title">加密导入导出</span><span class="te-feature-desc">账号备份通过密码加密，本地安全迁移。</span></span>
+        </div>
+        <div class="te-feature">
+          <span class="te-feature-icon">5</span>
+          <span><span class="te-feature-title">安全恢复</span><span class="te-feature-desc">切换或登录中断时自动恢复原账号。</span></span>
+        </div>
+      </div>
+    </div>
+  `;
+
+  content.append(accountPane, aboutPane);
 
   const footer = document.createElement("div");
   footer.className = "te-footer";
@@ -584,7 +879,7 @@
   const toast = document.createElement("div");
   toast.className = "te-toast";
 
-  panel.append(header, body, footer, toast);
+  panel.append(header, tabs, content, footer, toast);
 
   const oauthMask = document.createElement("div");
   oauthMask.className = "te-modal-mask";
@@ -663,6 +958,9 @@
 
   let toastTimer = null;
   let refreshGeneration = 0;
+  let insightsRefreshGeneration = 0;
+  let activeTab = "account";
+  let accountCount = 0;
   let oauthSession = null;
   let oauthPollTimer = null;
   let fakeLogoutSession = null;
@@ -722,8 +1020,51 @@
     }).format(new Date(value));
   }
 
+  function formatNumber(value) {
+    if (!Number.isFinite(Number(value))) return String(value ?? "--");
+    return new Intl.NumberFormat("zh-CN", {
+      maximumFractionDigits: 2,
+    }).format(Number(value));
+  }
+
   function accountMeta(account) {
-    return account.maskedEmail || account.maskedUserId || "已保存认证";
+    return [
+      account.phone || account.maskedPhone,
+      account.maskedEmail || account.maskedUserId,
+    ].filter(Boolean).join(" · ") || "已保存认证";
+  }
+
+  function accountCreditView(account) {
+    const insights = account.insights;
+    if (!insights) {
+      return { value: "--", detail: "额度未同步", error: false };
+    }
+    const plan = insights.plan || insights.planKey || "套餐未知";
+    const quota = insights.quota || {};
+    let value = "--";
+    let detail = "";
+    if (quota.model === "credits") {
+      value = quota.credits?.unlimited
+        ? "不限量"
+        : formatNumber(quota.credits?.remaining ?? "--");
+    } else if (quota.model === "fast_request") {
+      value = quota.fastLimit === -1
+        ? "不限量"
+        : formatNumber(quota.fastAvailable ?? "--");
+      detail = "速通";
+    } else if (quota.model === "usd" && quota.basicQuota > 0) {
+      value = formatNumber(quota.basicUsage ?? 0);
+      detail = `/ ${formatNumber(quota.basicQuota)}`;
+    } else if (quota.fastPerMonth !== null && quota.fastPerMonth !== undefined) {
+      value = formatNumber(quota.fastPerMonth);
+      detail = "次/月";
+    }
+    return {
+      plan,
+      value,
+      detail: detail || (insights.resetAt ? `重置 ${formatTime(insights.resetAt)}` : "剩余额度"),
+      error: !!insights.error,
+    };
   }
 
   function renderAccounts(accounts, currentAccountId) {
@@ -736,27 +1077,32 @@
       return;
     }
 
+    const totalCredits = accounts.reduce((sum, account) => {
+      const credits = account.insights?.credits;
+      return sum + (Number.isFinite(credits?.remaining) && credits.remaining >= 0
+        ? credits.remaining
+        : 0);
+    }, 0);
+    toolbar.querySelector(".te-account-count").textContent = String(accounts.length);
+    toolbar.querySelector(".te-total-credit").textContent =
+      accounts.some((account) => account.insights?.credits) ? formatNumber(totalCredits) : "--";
+
     for (const account of accounts) {
       const card = document.createElement("article");
-      card.className = "te-card";
+      card.className = `te-card${account.id === currentAccountId ? " current" : ""}`;
 
-      const avatar = document.createElement("div");
-      avatar.className = "te-avatar";
-      avatar.textContent = (account.displayName || "T").trim().slice(0, 1).toUpperCase();
+      const row = document.createElement("div");
+      row.className = "te-account-row";
 
       const main = document.createElement("div");
       main.className = "te-account-main";
       const name = document.createElement("div");
       name.className = "te-name";
       name.textContent = account.displayName || "TRAE account";
-      const meta = document.createElement("div");
-      meta.className = "te-meta";
-      meta.textContent = accountMeta(account);
-      main.append(name, meta);
+      main.appendChild(name);
 
-      const time = document.createElement("div");
-      time.className = "te-time";
-      time.textContent = formatTime(account.updatedAt);
+      const ops = document.createElement("div");
+      ops.className = "te-account-ops";
 
       let action;
       if (account.id === currentAccountId) {
@@ -779,8 +1125,38 @@
           </svg>
         `;
       }
+      ops.appendChild(action);
+      row.append(main, ops);
 
-      card.append(avatar, main, time, action);
+      const creditView = accountCreditView(account);
+      const meta = document.createElement("div");
+      meta.className = "te-meta-row";
+      const phone = document.createElement("span");
+      phone.className = "te-meta-item";
+      phone.innerHTML = '<span class="te-meta-label">手机</span><span class="te-meta-value"></span>';
+      phone.querySelector(".te-meta-value").textContent =
+        account.phone || account.maskedPhone || "未获取";
+      const plan = document.createElement("span");
+      plan.className = "te-meta-item";
+      plan.innerHTML = '<span class="te-meta-label">套餐</span><span class="te-meta-value"></span>';
+      plan.querySelector(".te-meta-value").textContent = creditView.plan || "未知";
+      meta.append(phone, plan);
+
+      const credit = document.createElement("div");
+      credit.className = "te-credit-block";
+      const creditLabel = document.createElement("span");
+      creditLabel.className = "te-credit-label";
+      creditLabel.textContent = "剩余";
+      const creditValue = document.createElement("strong");
+      creditValue.className = "te-credit-value";
+      creditValue.textContent = creditView.value;
+      const creditDetail = document.createElement("span");
+      creditDetail.className = "te-credit-detail";
+      creditDetail.textContent = creditView.error ? "额度更新失败" : creditView.detail;
+      creditDetail.title = account.insights?.error || creditDetail.textContent;
+      credit.append(creditLabel, creditValue, creditDetail);
+
+      card.append(row, meta, credit);
       list.appendChild(card);
     }
   }
@@ -806,37 +1182,77 @@
       } else {
         status.textContent = health.cdpConnected ? "CDP 已连接" : "等待 CDP";
       }
-      header.querySelector(".te-subtitle").textContent = `账号 ${data.accounts.length}`;
+      accountCount = data.accounts.length;
+      header.querySelector(".te-subtitle").textContent =
+        activeTab === "about" ? `v${APP_VERSION}` : `账号 ${accountCount}`;
       renderAccounts(data.accounts, data.currentAccountId);
+      return data;
     } catch (error) {
       if (generation !== refreshGeneration) return;
       const status = footer.querySelector(".te-status");
       footer.querySelector(".te-dot").classList.remove("online");
       status.textContent = "服务不可用";
       showToast(error.message || String(error), true);
+      return null;
     } finally {
       refreshButton.disabled = false;
     }
   }
 
-  async function backupCurrent() {
-    const button = toolbar.querySelector(".te-backup");
-    const label = button.querySelector("span");
-    const original = label.textContent;
-    button.disabled = true;
-    label.textContent = "备份中";
+  async function autoBackupCurrent() {
     try {
-      const result = await api("/api/accounts/backup", {
+      return await api("/api/accounts/backup", {
         method: "POST",
         body: "{}",
       });
-      showToast(result.createdSnapshot ? "已保存当前账号" : "账号备份已更新");
+    } catch {
+      return null;
+    }
+  }
+
+  function switchTab(name) {
+    activeTab = name === "about" ? "about" : "account";
+    tabs.querySelectorAll(".te-tab").forEach((tab) => {
+      tab.classList.toggle("active", tab.dataset.tab === activeTab);
+    });
+    content.querySelectorAll(".te-pane").forEach((pane) => {
+      pane.classList.toggle("active", pane.dataset.pane === activeTab);
+    });
+    header.querySelector(".te-subtitle").textContent =
+      activeTab === "about" ? `v${APP_VERSION}` : `账号 ${accountCount}`;
+  }
+
+  function shouldRefreshInsights(accounts) {
+    const now = Date.now();
+    return accounts.some((account) => {
+      const updatedAt = Date.parse(account.insights?.updatedAt || "");
+      return !Number.isFinite(updatedAt) || now - updatedAt > 5 * 60 * 1000;
+    });
+  }
+
+  async function refreshAccountInsights({ manual = false } = {}) {
+    const generation = ++insightsRefreshGeneration;
+    const button = toolbar.querySelector(".te-refresh");
+    if (manual) button.disabled = true;
+    try {
+      const result = await api("/api/accounts/insights/refresh", {
+        method: "POST",
+        body: "{}",
+      });
+      if (generation !== insightsRefreshGeneration) return;
       await refresh();
+      if (manual) {
+        showToast(
+          result.failed
+            ? `额度已更新，${result.failed} 个账号失败`
+            : "账号额度已更新",
+          result.failed > 0,
+        );
+      }
     } catch (error) {
-      showToast(error.message || String(error), true);
+      if (manual) showToast(error.message || String(error), true);
     } finally {
-      button.disabled = false;
-      label.textContent = original;
+      if (manual) button.disabled = false;
     }
   }
 
@@ -1291,7 +1707,17 @@
 
   function openPanel() {
     panel.classList.add("open");
-    refresh().catch(() => {});
+    refresh()
+      .then(async (data) => {
+        if (data?.accounts && !data.currentAccountId) {
+          const backup = await autoBackupCurrent();
+          if (backup) data = await refresh();
+        }
+        if (data?.accounts && shouldRefreshInsights(data.accounts)) {
+          refreshAccountInsights().catch(() => {});
+        }
+      })
+      .catch(() => {});
   }
 
   function closePanel() {
@@ -1303,8 +1729,9 @@
     else openPanel();
   });
   header.querySelector(".te-close").addEventListener("click", closePanel);
-  toolbar.querySelector(".te-refresh").addEventListener("click", () => refresh());
-  toolbar.querySelector(".te-backup").addEventListener("click", backupCurrent);
+  toolbar.querySelector(".te-refresh").addEventListener("click", () => {
+    refreshAccountInsights({ manual: true }).catch(() => {});
+  });
   toolbar.querySelector(".te-login-new").addEventListener("click", openLoginChoice);
   toolbar.querySelector(".te-export-accounts").addEventListener("click", () => {
     openExportDialog().catch(() => {});
@@ -1316,6 +1743,9 @@
     const file = importFileInput.files?.[0];
     importFileInput.value = "";
     if (file) openImportDialog(file).catch(() => {});
+  });
+  tabs.querySelectorAll(".te-tab").forEach((tab) => {
+    tab.addEventListener("click", () => switchTab(tab.dataset.tab));
   });
   list.addEventListener("click", (event) => {
     const button = event.target.closest(".te-acc-switch");

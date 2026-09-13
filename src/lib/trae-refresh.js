@@ -2,6 +2,10 @@ import crypto from "node:crypto";
 
 import { pickNumber, pickString, requestJson, safeRemoteError } from "./http.js";
 import { encryptIcubesValue, parseIcubesValue } from "./trae-crypto.js";
+import {
+  fetchTraeAccountInsights,
+  TraeInsightsAuthError,
+} from "./trae-insights.js";
 import { normalizeEmail, traeStorageKeys } from "./trae-storage.js";
 
 const CLIENT_ID = "en1oxy7wnw8j9n";
@@ -254,5 +258,24 @@ export async function refreshAuthSnapshot(snapshot) {
     snapshot: normalized,
     auth,
     profile,
+  };
+}
+
+export async function refreshAccountInsights(snapshot) {
+  try {
+    return {
+      snapshot,
+      insights: await fetchTraeAccountInsights(snapshot),
+      refreshedToken: false,
+    };
+  } catch (error) {
+    if (!(error instanceof TraeInsightsAuthError)) throw error;
+  }
+
+  const refreshed = await refreshAuthSnapshot(snapshot);
+  return {
+    snapshot: refreshed.snapshot,
+    insights: await fetchTraeAccountInsights(refreshed.snapshot),
+    refreshedToken: true,
   };
 }

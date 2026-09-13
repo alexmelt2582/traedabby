@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 
 export const APP_NAME = "TRAE SOLO CN Enhancer";
-export const APP_VERSION = "0.1.0";
+export const APP_VERSION = "1.0.0";
 export const PROJECT_ROOT = path.resolve(currentDir, "..");
 
 export const DEFAULT_CDP_PORT = 9334;
@@ -41,4 +41,3 @@ export function parsePort(value, fallback) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isInteger(parsed) && parsed > 0 && parsed < 65536 ? parsed : fallback;
 }
-
