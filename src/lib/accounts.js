@@ -134,5 +134,54 @@ export class AccountStore {
     validateAuthSnapshot(snapshot);
     return snapshot;
   }
-}
 
+  async saveSnapshot(accountId, snapshot, { now = Date.now() } = {}) {
+    validateAuthSnapshot(snapshot);
+    const index = await this.readIndex();
+    const position = index.accounts.findIndex((record) => record.id === accountId);
+    if (position < 0) throw new Error("Account backup was not found");
+    const identity = cleanIdentity(extractIdentityFromSnapshot(snapshot));
+    await writeJsonAtomic(this.snapshotPath(accountId), snapshot, { mode: 0o600 });
+    index.accounts[position] = {
+      ...index.accounts[position],
+      userId: identity.userId || index.accounts[position].userId,
+      email: identity.email || index.accounts[position].email,
+      phone: identity.phone || index.accounts[position].phone,
+      nickname: identity.nickname || index.accounts[position].nickname,
+      displayName: safeDisplayName({
+        ...index.accounts[position],
+        ...identity,
+      }),
+      updatedAt: now,
+      snapshotCapturedAt: snapshot.capturedAt,
+    };
+    await writeJsonAtomic(this.indexPath, index, { mode: 0o600 });
+    return publicAccount(index.accounts[position]);
+  }
+
+  async findAccount(accountId) {
+    const index = await this.readIndex();
+    return index.accounts.find((record) => record.id === accountId) || null;
+  }
+
+  async resolveCurrentAccountId(storageRoot) {
+    let identity;
+    try {
+      identity = extractIdentityFromSnapshot(extractAuthSnapshot(storageRoot));
+    } catch {
+      return null;
+    }
+    if (!identity.userId && !identity.email) return null;
+    const index = await this.readIndex();
+    const record = index.accounts.find((candidate) => {
+      if (identity.userId && candidate.userId) {
+        return String(identity.userId) === String(candidate.userId);
+      }
+      if (identity.email && candidate.email) {
+        return String(identity.email).toLowerCase() === String(candidate.email).toLowerCase();
+      }
+      return false;
+    });
+    return record?.id || null;
+  }
+}

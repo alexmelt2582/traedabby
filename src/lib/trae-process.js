@@ -88,6 +88,19 @@ export async function findTraeWindowProcessIds(exePath) {
   return (Array.isArray(parsed) ? parsed : [parsed]).map(Number).filter(Number.isInteger);
 }
 
+export async function findTraeProcessIds(exePath) {
+  const script = `
+    $target = ${psQuote(exePath)}
+    @(Get-Process -Name 'TRAE SOLO CN' -ErrorAction SilentlyContinue | Where-Object {
+      $_.Path -and $_.Path.Equals($target, [System.StringComparison]::OrdinalIgnoreCase)
+    } | Select-Object -ExpandProperty Id) | ConvertTo-Json -Compress
+  `;
+  const output = await runPowerShell(script);
+  if (!output) return [];
+  const parsed = JSON.parse(output);
+  return (Array.isArray(parsed) ? parsed : [parsed]).map(Number).filter(Number.isInteger);
+}
+
 async function waitForExit(processIds, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   const remaining = new Set(processIds);
@@ -105,7 +118,7 @@ async function waitForExit(processIds, timeoutMs) {
 }
 
 export async function stopTraeForRestart(exePath, { timeoutMs = 15000 } = {}) {
-  const processIds = await findTraeWindowProcessIds(exePath);
+  const processIds = await findTraeProcessIds(exePath);
   if (!processIds.length) return [];
 
   const script = `
@@ -117,6 +130,8 @@ export async function stopTraeForRestart(exePath, { timeoutMs = 15000 } = {}) {
   await runPowerShell(script);
   let remaining = await waitForExit(processIds, timeoutMs);
   if (!remaining.length) return [];
+
+  await new Promise((resolve) => setTimeout(resolve, 300));
 
   const forceScript = `
     $ids = @(${remaining.join(",")})
@@ -131,7 +146,7 @@ export async function stopTraeForRestart(exePath, { timeoutMs = 15000 } = {}) {
 }
 
 export async function startTraeWithCdp(exePath, port) {
-  const child = spawn(exePath, [`--remote-debugging-port=${port}`], {
+  const child = spawn(exePath, ["--new-window", `--remote-debugging-port=${port}`], {
     cwd: path.dirname(exePath),
     detached: true,
     stdio: "ignore",

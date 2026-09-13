@@ -181,7 +181,7 @@
     #${ROOT_ID} .te-card {
       min-height: 68px;
       display: grid;
-      grid-template-columns: 34px minmax(0, 1fr) auto;
+      grid-template-columns: 34px minmax(0, 1fr) auto auto;
       align-items: center;
       gap: 10px;
       padding: 10px;
@@ -226,6 +226,16 @@
       color: var(--te-muted);
       font-size: 10px;
       text-align: right;
+    }
+
+    #${ROOT_ID} .te-current {
+      padding: 3px 7px;
+      border-radius: 999px;
+      color: #22a06b;
+      background: color-mix(in srgb, #22a06b 13%, transparent);
+      font-size: 10px;
+      font-weight: 700;
+      white-space: nowrap;
     }
 
     #${ROOT_ID} .te-empty {
@@ -472,7 +482,7 @@
     return account.maskedEmail || account.maskedUserId || "已保存认证";
   }
 
-  function renderAccounts(accounts) {
+  function renderAccounts(accounts, currentAccountId) {
     list.replaceChildren();
     if (!accounts.length) {
       const empty = document.createElement("div");
@@ -504,7 +514,29 @@
       time.className = "te-time";
       time.textContent = formatTime(account.updatedAt);
 
-      card.append(avatar, main, time);
+      let action;
+      if (account.id === currentAccountId) {
+        action = document.createElement("span");
+        action.className = "te-current";
+        action.textContent = "当前";
+      } else {
+        action = document.createElement("button");
+        action.className = "te-icon-btn te-acc-switch";
+        action.type = "button";
+        action.title = "切换到此账号";
+        action.setAttribute("aria-label", "切换到此账号");
+        action.dataset.accountId = account.id;
+        action.innerHTML = `
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M16 3l4 4-4 4"/>
+            <path d="M20 7H8"/>
+            <path d="M8 21l-4-4 4-4"/>
+            <path d="M4 17h12"/>
+          </svg>
+        `;
+      }
+
+      card.append(avatar, main, time, action);
       list.appendChild(card);
     }
   }
@@ -521,7 +553,7 @@
       dot.classList.toggle("online", !!health.cdpConnected);
       status.textContent = health.cdpConnected ? "CDP 已连接" : "等待 CDP";
       header.querySelector(".te-subtitle").textContent = `账号 ${data.accounts.length}`;
-      renderAccounts(data.accounts);
+      renderAccounts(data.accounts, data.currentAccountId);
     } catch (error) {
       if (generation !== refreshGeneration) return;
       const status = footer.querySelector(".te-status");
@@ -551,6 +583,26 @@
     } finally {
       button.disabled = false;
       label.textContent = original;
+    }
+  }
+
+  async function switchAccount(button, accountId) {
+    const card = button.closest(".te-card");
+    const name = card?.querySelector(".te-name")?.textContent || "目标账号";
+    button.disabled = true;
+    showToast(`正在切换到「${name}」...`);
+    try {
+      await api("/api/accounts/switch", {
+        method: "POST",
+        body: JSON.stringify({ accountId }),
+      });
+      showToast(`已切换到「${name}」`);
+      await refresh();
+    } catch (error) {
+      showToast(error.message || String(error), true);
+      await refresh();
+    } finally {
+      button.disabled = false;
     }
   }
 
@@ -646,6 +698,11 @@
   toolbar.querySelector(".te-refresh").addEventListener("click", () => refresh());
   toolbar.querySelector(".te-backup").addEventListener("click", backupCurrent);
   toolbar.querySelector(".te-login-new").addEventListener("click", startOAuth);
+  list.addEventListener("click", (event) => {
+    const button = event.target.closest(".te-acc-switch");
+    if (!button?.dataset.accountId) return;
+    switchAccount(button, button.dataset.accountId).catch(() => {});
+  });
   oauthMask.querySelector(".te-oauth-reopen").addEventListener("click", () => {
     if (!oauthSession?.loginId) return;
     api("/api/oauth/open", {

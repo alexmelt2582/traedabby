@@ -63,3 +63,22 @@ test("backup updates one identity instead of creating duplicates", async () => {
   }
 });
 
+test("saving a snapshot repairs stale public metadata", async () => {
+  const dataDir = await tempDir();
+  try {
+    const store = new AccountStore(dataDir);
+    const saved = await store.backupCurrent(storageFixture(), { now: 100 });
+    const snapshot = await store.readSnapshot(saved.account.id);
+    const authKey = "iCubeAuthInfo://icube.cloudide";
+    snapshot.keys[authKey] = JSON.stringify({
+      userId: "1026288307407252",
+      account: { userId: "1026288307407252", username: "修复后的昵称" },
+    });
+    await store.saveSnapshot(saved.account.id, snapshot, { now: 200 });
+    const [account] = await store.list();
+    assert.equal(account.nickname, "修复后的昵称");
+    assert.equal(account.displayName, "修复后的昵称");
+  } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});

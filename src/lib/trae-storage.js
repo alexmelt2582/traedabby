@@ -1,3 +1,5 @@
+import { encryptIcubesValue, parseIcubesValue } from "./trae-crypto.js";
+
 const AUTH_PREFIX = "iCubeAuthInfo://";
 const SERVER_PREFIX = "iCubeServerData://";
 const ENTITLEMENT_PREFIX = "iCubeEntitlementInfo://";
@@ -47,6 +49,16 @@ function isUserAuthKey(key) {
   return key.startsWith(AUTH_PREFIX) && !isDeviceKey(key) && key !== USERTAG_KEY;
 }
 
+function isManagedAuthKey(key) {
+  return (
+    isUserAuthKey(key) ||
+    isDeviceKey(key) ||
+    key === USERTAG_KEY ||
+    key.startsWith(SERVER_PREFIX) ||
+    key.startsWith(ENTITLEMENT_PREFIX)
+  );
+}
+
 export function extractAuthSnapshot(storageRoot, { capturedAt = Date.now() } = {}) {
   if (!isObject(storageRoot)) {
     throw new Error("TRAE storage.json must contain a JSON object");
@@ -54,13 +66,7 @@ export function extractAuthSnapshot(storageRoot, { capturedAt = Date.now() } = {
 
   const keys = {};
   for (const [key, value] of Object.entries(storageRoot)) {
-    if (
-      isUserAuthKey(key) ||
-      isDeviceKey(key) ||
-      key === USERTAG_KEY ||
-      key.startsWith(SERVER_PREFIX) ||
-      key.startsWith(ENTITLEMENT_PREFIX)
-    ) {
+    if (isManagedAuthKey(key)) {
       keys[key] = value;
     }
   }
@@ -73,6 +79,90 @@ export function extractAuthSnapshot(storageRoot, { capturedAt = Date.now() } = {
   };
   validateAuthSnapshot(snapshot);
   return snapshot;
+}
+
+export function mergeAuthSnapshot(storageRoot, snapshot) {
+  if (!isObject(storageRoot)) {
+    throw new Error("TRAE storage.json must contain a JSON object");
+  }
+  validateAuthSnapshot(snapshot);
+  const merged = structuredClone(storageRoot);
+  for (const key of Object.keys(merged)) {
+    if (isManagedAuthKey(key)) delete merged[key];
+  }
+  Object.assign(merged, structuredClone(snapshot.keys));
+  return merged;
+}
+
+function normalizeIsoTimestamp(value, fallback) {
+  if (typeof value === "string" && value.trim()) {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const milliseconds = value > 10_000_000_000 ? value : value * 1000;
+    return new Date(milliseconds).toISOString();
+  }
+  return fallback;
+}
+
+export function normalizeAuthSnapshotForInjection(snapshot) {
+  validateAuthSnapshot(snapshot);
+  const normalized = structuredClone(snapshot);
+  const authKey = Object.keys(normalized.keys).find(isUserAuthKey);
+  if (!authKey) throw new Error("TRAE snapshot is missing the user authentication key");
+
+  const auth = parseIcubesValue(normalized.keys[authKey]);
+  if (!isObject(auth)) throw new Error("TRAE user authentication payload is invalid");
+
+  const account = isObject(auth.account) ? auth.account : {};
+  const userId = normalizeText(auth.userId) || normalizeText(account.userId);
+  const email = normalizeText(auth.email) || normalizeText(account.email) || "";
+  const nickname = normalizeText(account.username) || email || userId || "TRAE account";
+  const userTag = normalizeText(auth.userTag) || normalizeText(account.userTag) || "row";
+  const now = new Date().toISOString();
+
+  account.username = nickname;
+  account.iss ??= "";
+  account.iat ??= 0;
+  account.organization ??= "";
+  account.work_country ??= "";
+  account.email ??= email;
+  account.avatar_url ??= "";
+  account.description ??= "";
+  account.scope = normalizeText(account.scope) || "marscode";
+  account.loginScope = normalizeText(account.loginScope) || "trae";
+  account.storeCountryCode ??= "CN";
+  account.storeCountrySrc ??= "";
+  account.storeRegion = normalizeText(account.storeRegion) || "CN";
+  account.userTag = userTag;
+  if (userId) account.userId ??= userId;
+
+  auth.token ??= auth.accessToken;
+  auth.accessToken ??= auth.token;
+  if (userId) auth.userId ??= userId;
+  auth.host ??= "https://api.trae.cn";
+  auth.loginHost ??= auth.host;
+  auth.apiHost ??= auth.host;
+  auth.authClientId ??= "en1oxy7wnw8j9n";
+  auth.authDomain ??= "www.trae.cn";
+  auth.platformId ??= "trae_solo_cn";
+  auth.platformName ??= "TRAE SOLO CN";
+  auth.storeRegion = normalizeText(auth.storeRegion) || "CN";
+  auth.AIRegion = normalizeText(auth.AIRegion) || "CN";
+  auth.userTag = userTag;
+  auth.expiredAt = normalizeIsoTimestamp(auth.expiredAt, now);
+  auth.refreshExpiredAt = normalizeIsoTimestamp(auth.refreshExpiredAt, auth.expiredAt);
+  auth.tokenReleaseAt = normalizeIsoTimestamp(auth.tokenReleaseAt, now);
+  auth.userRegion = {
+    ...(isObject(auth.userRegion) ? auth.userRegion : {}),
+    region: normalizeText(auth.userRegion?.region) || "CN",
+    _aiRegion: normalizeText(auth.userRegion?._aiRegion) || "CN",
+  };
+  auth.account = account;
+
+  normalized.keys[authKey] = encryptIcubesValue(auth);
+  return normalized;
 }
 
 export function validateAuthSnapshot(snapshot) {
@@ -156,6 +246,16 @@ function pickIdentityCandidate(candidates, kind, pathHint) {
 }
 
 export function extractIdentityFromSnapshot(snapshot) {
+  const authKey = Object.keys(snapshot.keys).find(isUserAuthKey);
+  let auth = null;
+  if (authKey) {
+    try {
+      auth = parseIcubesValue(snapshot.keys[authKey]);
+    } catch {
+      auth = null;
+    }
+  }
+
   const roots = Object.entries(snapshot.keys)
     .filter(
       ([key]) =>
@@ -166,16 +266,24 @@ export function extractIdentityFromSnapshot(snapshot) {
     .map(([, value]) => value);
 
   const candidates = roots.flatMap(collectIdentityCandidates);
+  const account = isObject(auth?.account) ? auth.account : {};
+  const authUserId = normalizeText(auth?.userId) || normalizeText(account.userId);
+  const authEmail = normalizeText(auth?.email) || normalizeText(account.email);
+  const authNickname =
+    normalizeText(account.username) ||
+    normalizeText(account.nickname) ||
+    normalizeText(auth?.nickname);
   const userId =
+    authUserId ||
     pickIdentityCandidate(candidates, "userId", "entitlementbaseinfo") ||
     pickIdentityCandidate(candidates, "userId", "account") ||
     pickIdentityCandidate(candidates, "userId");
 
   return {
     userId,
-    email: pickIdentityCandidate(candidates, "email"),
+    email: authEmail || pickIdentityCandidate(candidates, "email"),
     phone: pickIdentityCandidate(candidates, "phone"),
-    nickname: pickIdentityCandidate(candidates, "nickname"),
+    nickname: authNickname || pickIdentityCandidate(candidates, "nickname"),
   };
 }
 
@@ -206,5 +314,3 @@ export const traeStorageKeys = Object.freeze({
   DEVICE_PREFIX,
   USERTAG_KEY,
 });
-import { parseIcubesValue } from "./trae-crypto.js";
-

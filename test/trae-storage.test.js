@@ -5,9 +5,12 @@ import {
   extractAuthSnapshot,
   extractIdentityFromSnapshot,
   maskAccountValue,
+  mergeAuthSnapshot,
+  normalizeAuthSnapshotForInjection,
   traeStorageKeys,
   validateAuthSnapshot,
 } from "../src/lib/trae-storage.js";
+import { parseIcubesValue } from "../src/lib/trae-crypto.js";
 
 function storageFixture() {
   return {
@@ -64,8 +67,53 @@ test("identity extraction never uses the device key suffix", () => {
   assert.equal(identity.email, "tester@example.com");
 });
 
+test("identity extraction prefers the decrypted auth userId over server data", () => {
+  const source = storageFixture();
+  source["iCubeAuthInfo://icube.cloudide"] = JSON.stringify({
+    userId: "9999999999999999",
+  });
+  const identity = extractIdentityFromSnapshot(extractAuthSnapshot(source));
+  assert.equal(identity.userId, "9999999999999999");
+});
+
 test("account values are masked for the public API", () => {
   assert.equal(maskAccountValue("1026288307407252"), "************7252");
   assert.equal(maskAccountValue("tester@example.com"), "te***@example.com");
 });
 
+test("merging a snapshot replaces only managed authentication keys", () => {
+  const current = storageFixture();
+  const target = extractAuthSnapshot(
+    {
+      ...storageFixture(),
+      "iCubeAuthInfo://icube.cloudide": "target-auth",
+      "iCubeServerData://icube.cloudide": JSON.stringify({
+        account: { userId: "9999999999999999" },
+      }),
+    },
+    { capturedAt: 999 },
+  );
+  const merged = mergeAuthSnapshot(current, target);
+  assert.equal(merged.theme, "dark");
+  assert.deepEqual(merged.windowsState, { openedWindows: [{ id: 1 }] });
+  assert.equal(merged["iCubeAuthInfo://icube.cloudide"], "target-auth");
+  assert.equal(merged["iCubeAuthInfo://icube-dc:1360520616887347"], "encrypted-device-key");
+});
+
+test("injection normalization restores fields required by the TRAE login manager", () => {
+  const source = storageFixture();
+  source["iCubeAuthInfo://icube.cloudide"] = JSON.stringify({
+    accessToken: "access",
+    refreshToken: "refresh",
+    userId: "1026288307407252",
+    deviceKeyPair: { privateKeyPEM: "private", publicKeyPEM: "public" },
+    account: { userId: "1026288307407252", username: "tester" },
+  });
+  const normalized = normalizeAuthSnapshotForInjection(extractAuthSnapshot(source));
+  const auth = parseIcubesValue(normalized.keys["iCubeAuthInfo://icube.cloudide"]);
+  assert.equal(auth.account.scope, "marscode");
+  assert.equal(auth.account.loginScope, "trae");
+  assert.equal(auth.account.storeRegion, "CN");
+  assert.equal(auth.account.userTag, "row");
+  assert.equal(auth.token, "access");
+});

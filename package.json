@@ -10,7 +10,7 @@
     "doctor": "node scripts/doctor.js",
     "git:status": "git --git-dir=.git-meta --work-tree=. status --short",
     "test": "node --test",
-    "check": "node --check src/launcher.js && node --check src/daemon.js && node --check src/ui/inject.js && node --check src/lib/trae-crypto.js && node --check src/lib/trae-oauth.js && node --check scripts/doctor.js"
+    "check": "node --check src/launcher.js && node --check src/daemon.js && node --check src/ui/inject.js && node --check src/lib/trae-crypto.js && node --check src/lib/trae-oauth.js && node --check src/lib/trae-refresh.js && node --check src/lib/storage-transaction.js && node --check scripts/doctor.js"
   },
   "engines": {
     "node": ">=22.0.0"

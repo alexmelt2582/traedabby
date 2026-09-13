@@ -18,16 +18,33 @@ import {
 } from "./constants.js";
 import { AccountStore } from "./lib/accounts.js";
 import { readJsonFile, readTextFile, writeTextAtomic } from "./lib/json-file.js";
+import { normalizeAuthSnapshotForInjection } from "./lib/trae-storage.js";
+import { refreshAuthSnapshot } from "./lib/trae-refresh.js";
+import {
+  findTraeProcessIds,
+  startTraeWithCdp,
+  stopTraeForRestart,
+  traeExecutableExists,
+  waitForCdp,
+} from "./lib/trae-process.js";
 import { TraeOAuthManager } from "./lib/trae-oauth.js";
+import {
+  applyAuthSnapshot,
+  rollbackAuthSnapshot,
+  waitForStorageIdentity,
+} from "./lib/storage-transaction.js";
 
 const CDP_PORT = parsePort(process.env.TRAE_ENHANCER_CDP_PORT, DEFAULT_CDP_PORT);
 const UI_PORT = parsePort(process.env.TRAE_ENHANCER_UI_PORT, DEFAULT_UI_PORT);
 const DATA_DIR = process.env.TRAE_ENHANCER_DATA_DIR || DEFAULT_DATA_DIR;
 const STORAGE_PATH = process.env.TRAE_ENHANCER_STORAGE_PATH || DEFAULT_STORAGE_PATH;
+const TRAE_EXE = process.env.TRAE_ENHANCER_TRAE_EXE || DEFAULT_TRAE_EXE;
 const API_TOKEN_PATH = path.join(DATA_DIR, "api-token");
+const TRANSACTION_DIR = path.join(DATA_DIR, "transactions");
 
 const accountStore = new AccountStore(DATA_DIR);
 let cdpConnected = false;
+let switchInFlight = null;
 
 async function getApiToken() {
   const existing = await readTextFile(API_TOKEN_PATH, { required: false });
@@ -73,6 +90,81 @@ function requireApiToken(request, apiToken) {
   return request.headers["x-trae-enhancer-token"] === apiToken;
 }
 
+async function stopTraeForSwitch() {
+  if (!(await traeExecutableExists(TRAE_EXE))) {
+    throw new Error(`TRAE SOLO CN executable was not found: ${TRAE_EXE}`);
+  }
+  await stopTraeForRestart(TRAE_EXE);
+  await delay(700);
+  if ((await findTraeProcessIds(TRAE_EXE)).length) {
+    await stopTraeForRestart(TRAE_EXE);
+    await delay(700);
+  }
+  if ((await findTraeProcessIds(TRAE_EXE)).length) {
+    throw new Error("TRAE SOLO CN did not remain fully stopped");
+  }
+}
+
+async function startTraeForSwitch() {
+  await startTraeWithCdp(TRAE_EXE, CDP_PORT);
+  return await waitForCdp(CDP_PORT);
+}
+
+async function restartTraeForSwitch() {
+  await stopTraeForSwitch();
+  return await startTraeForSwitch();
+}
+
+async function switchAccount(accountId) {
+  const account = await accountStore.findAccount(accountId);
+  if (!account) throw new Error("Account backup was not found");
+  let snapshot = normalizeAuthSnapshotForInjection(
+    await accountStore.readSnapshot(accountId),
+  );
+
+  try {
+    const refreshed = await refreshAuthSnapshot(snapshot);
+    snapshot = refreshed.snapshot;
+    await accountStore.saveSnapshot(accountId, snapshot);
+  } catch (error) {
+    throw new Error(
+      `目标账号登录凭据已失效，请重新登录该账号后再切换：${error.message || error}`,
+    );
+  }
+
+  await stopTraeForSwitch();
+  let transaction;
+  try {
+    transaction = await applyAuthSnapshot({
+      storagePath: STORAGE_PATH,
+      snapshot,
+      transactionDir: TRANSACTION_DIR,
+    });
+  } catch (error) {
+    await startTraeForSwitch().catch(() => false);
+    throw error;
+  }
+
+  try {
+    await startTraeForSwitch();
+    const verification = await waitForStorageIdentity(STORAGE_PATH, account.userId);
+    if (!verification.ok) {
+      throw new Error("TRAE did not accept the selected account after restart");
+    }
+    return {
+      account,
+      transactionId: transaction.transactionId,
+      verified: true,
+      refreshWarning: null,
+    };
+  } catch (error) {
+    await stopTraeForSwitch().catch(() => {});
+    await rollbackAuthSnapshot(STORAGE_PATH, transaction);
+    await restartTraeForSwitch().catch(() => false);
+    throw new Error(`${error.message}; the previous login state was restored`);
+  }
+}
+
 async function route(request, response, apiToken, cdpClient, oauthManager) {
   const requestUrl = new URL(request.url || "/", `http://${LOOPBACK_HOST}:${UI_PORT}`);
   const pathname = requestUrl.pathname;
@@ -109,7 +201,14 @@ async function route(request, response, apiToken, cdpClient, oauthManager) {
 
   if (request.method === "GET" && pathname === "/api/accounts") {
     const accounts = await accountStore.list();
-    jsonResponse(response, 200, { ok: true, accounts });
+    let currentAccountId = null;
+    try {
+      const storageRoot = await readJsonFile(STORAGE_PATH);
+      currentAccountId = await accountStore.resolveCurrentAccountId(storageRoot);
+    } catch {
+      currentAccountId = null;
+    }
+    jsonResponse(response, 200, { ok: true, accounts, currentAccountId });
     return;
   }
 
@@ -118,6 +217,22 @@ async function route(request, response, apiToken, cdpClient, oauthManager) {
     const liveIdentity = await cdpClient.getLiveIdentity();
     const result = await accountStore.backupCurrent(storageRoot, { liveIdentity });
     jsonResponse(response, 200, { ok: true, ...result });
+    return;
+  }
+
+  if (request.method === "POST" && pathname === "/api/accounts/switch") {
+    if (switchInFlight) {
+      jsonResponse(response, 409, { ok: false, error: "An account switch is already running" });
+      return;
+    }
+    const body = await readRequestBody(request);
+    switchInFlight = switchAccount(String(body.accountId || ""));
+    try {
+      const result = await switchInFlight;
+      jsonResponse(response, 200, { ok: true, ...result });
+    } finally {
+      switchInFlight = null;
+    }
     return;
   }
 
