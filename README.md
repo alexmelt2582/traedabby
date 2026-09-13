@@ -2,7 +2,7 @@
 
 A local, non-invasive enhancement assistant for `TRAE SOLO CN`.
 
-The first milestone provides:
+The project provides:
 
 - a Windows launcher that starts TRAE SOLO CN with a loopback CDP port;
 - a local daemon that injects a compact panel into the TRAE renderer;
@@ -48,3 +48,18 @@ npm start
 ```
 
 The default local service is `http://127.0.0.1:47834`.
+
+## Automatic jobs
+
+- Check-in runs a sweep five seconds after daemon startup and every 30 minutes.
+  Each account is claimed at most once per Asia/Shanghai calendar day.
+- Keep-alive sweeps every 30 minutes. Inactive accounts refresh credentials and
+  usage at most once every six hours; failures retry after 30 minutes.
+- The active account is synchronized from the running TRAE storage. Its refresh
+  token is not rotated from the stored backup.
+- Automatic check-in and keep-alive are skipped while Cockpit Tools is running.
+
+Set `TRAE_ENHANCER_AUTO_CHECKIN=0` or `TRAE_ENHANCER_AUTO_KEEPALIVE=0` to disable
+the corresponding scheduler. Keep-alive timing can be overridden with
+`TRAE_ENHANCER_KEEPALIVE_INTERVAL_MS` and
+`TRAE_ENHANCER_KEEPALIVE_RETRY_INTERVAL_MS`.

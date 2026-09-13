@@ -30,8 +30,10 @@ and keeps all account data on the local machine.
 - Keep-alive may rotate credentials only for inactive accounts. The active account
   must be synchronized from the running TRAE storage and must not have its refresh
   token rotated directly from the backup.
-- Skip automatic keep-alive while Cockpit Tools is running. Both tools rotating the
-  same refresh tokens can invalidate each other.
+- Skip automatic check-in and keep-alive while Cockpit Tools is running. Both tools
+  rotating the same refresh tokens can invalidate each other.
+- The total check-in reward is `credits`; `extra_credits` is only an additional
+  component and must not be displayed as the total.
 
 ## Safety
 
@@ -43,9 +45,25 @@ and keeps all account data on the local machine.
 - Never close every Electron process or use broad process-name termination.
 - Use UTF-8 without BOM for source files and JSON data.
 
+## Runtime Invariants
+
+- Git metadata is stored in `.git-meta`; use
+  `git --git-dir=.git-meta --work-tree=. ...`.
+- The default loopback service is `http://127.0.0.1:47834`; CDP defaults to
+  `127.0.0.1:9334`.
+- Check-in sweeps every 30 minutes and claims at most once per Asia/Shanghai day.
+- Keep-alive sweeps every 30 minutes. Inactive accounts refresh every six hours;
+  failures retry after 30 minutes.
+- Keep-alive, check-in, account switching, login flows, and insight refresh must be
+  mutually exclusive.
+- Restarting the daemon requires stopping the exact PID reported by `/api/health`.
+  Never terminate all Node or Electron processes.
+
 ## Workflow
 
 - Each commit must represent one complete, user-confirmed feature.
 - Do not commit until the user has tested and confirmed the feature.
 - Add focused tests for storage validation, account identity, and switch rollback.
 - Run `npm test` and `npm run check` before requesting confirmation.
+- Do not describe a result as implemented or verified until it has been reproduced
+  through code, tests, or the real loopback/remote API.
