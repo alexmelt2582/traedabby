@@ -147,3 +147,28 @@ test("account insights and phone metadata are exposed without touching snapshots
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 });
+
+test("account check-in metadata is exposed without touching snapshots", async () => {
+  const dataDir = await tempDir();
+  try {
+    const store = new AccountStore(dataDir);
+    const saved = await store.backupCurrent(storageFixture(), { now: 100 });
+    const updated = await store.saveCheckin(
+      saved.account.id,
+      {
+        date: "2026-09-13",
+        checkedInToday: true,
+        credits: 150,
+        reward: 50,
+        updatedAt: "2026-09-13T00:00:00.000Z",
+      },
+      { now: 200 },
+    );
+    assert.equal(updated.checkin.checkedInToday, true);
+    assert.equal(updated.checkin.reward, 50);
+    const snapshot = await store.readSnapshot(saved.account.id);
+    assert.equal(Object.hasOwn(snapshot, "checkin"), false);
+  } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});

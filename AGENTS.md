@@ -23,6 +23,10 @@ and keeps all account data on the local machine.
   as account metadata.
 - Account exports must always be encrypted with a user-supplied password. Never write
   passwords or plaintext authentication snapshots to disk or logs.
+- Check-in requests must use each account's stable `userId` as `x-device-id`. Never
+  share one machine-generated device id across accounts.
+- Check-in endpoints are served from `https://api.trae.cn`; do not substitute the
+  account-specific `loginHost`.
 
 ## Safety
 

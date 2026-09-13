@@ -433,6 +433,18 @@
       font-weight: 600;
     }
 
+    #${ROOT_ID} .te-checkin-state.checked {
+      color: #22a06b;
+    }
+
+    #${ROOT_ID} .te-checkin-state.error {
+      color: #ef4444;
+    }
+
+    #${ROOT_ID} .te-checkin-state.pending {
+      color: var(--te-muted);
+    }
+
     #${ROOT_ID} .te-credit-block {
       display: flex;
       align-items: baseline;
@@ -814,6 +826,13 @@
           <path d="M5 21h14"/>
         </svg>
       </button>
+      <button class="te-secondary te-account-io te-run-checkin" type="button" title="立即签到" aria-label="立即签到">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="5" width="18" height="16" rx="2"/>
+          <path d="M16 3v4M8 3v4M3 11h18"/>
+          <path d="m9 16 2 2 4-4"/>
+        </svg>
+      </button>
       <button class="te-secondary te-account-io te-refresh" type="button" title="刷新" aria-label="刷新">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/>
@@ -864,6 +883,10 @@
         </div>
         <div class="te-feature">
           <span class="te-feature-icon">5</span>
+          <span><span class="te-feature-title">自动签到</span><span class="te-feature-desc">每天自动检查并为全部账号领取签到积分。</span></span>
+        </div>
+        <div class="te-feature">
+          <span class="te-feature-icon">6</span>
           <span><span class="te-feature-title">安全恢复</span><span class="te-feature-desc">切换或登录中断时自动恢复原账号。</span></span>
         </div>
       </div>
@@ -968,6 +991,7 @@
   let backgroundLoginNoticeShown = false;
   let transferBusy = false;
   let transferSubmit = null;
+  let checkinBusy = false;
 
   function loginSessionSeen(sessionId) {
     if (!sessionId) return false;
@@ -1032,6 +1056,44 @@
       account.phone || account.maskedPhone,
       account.maskedEmail || account.maskedUserId,
     ].filter(Boolean).join(" · ") || "已保存认证";
+  }
+
+  function checkinDateKey() {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+  }
+
+  function accountCheckinView(account) {
+    const checkin = account.checkin;
+    const checkedToday =
+      checkin?.date === checkinDateKey() && checkin.checkedInToday === true;
+    if (checkedToday) {
+      return {
+        label: "已签到",
+        state: "checked",
+        title: checkin.reward
+          ? `今日签到奖励 ${checkin.reward} 积分`
+          : checkin.reason === "scheduled"
+            ? "今日已自动签到"
+            : "今日已签到",
+      };
+    }
+    if (checkin?.error) {
+      return {
+        label: "失败",
+        state: "error",
+        title: checkin.error,
+      };
+    }
+    return {
+      label: "待签到",
+      state: "pending",
+      title: "今日尚未签到",
+    };
   }
 
   function accountCreditView(account) {
@@ -1140,7 +1202,15 @@
       plan.className = "te-meta-item";
       plan.innerHTML = '<span class="te-meta-label">套餐</span><span class="te-meta-value"></span>';
       plan.querySelector(".te-meta-value").textContent = creditView.plan || "未知";
-      meta.append(phone, plan);
+      const checkinView = accountCheckinView(account);
+      const checkin = document.createElement("span");
+      checkin.className = "te-meta-item";
+      checkin.innerHTML = '<span class="te-meta-label">签到</span><span class="te-meta-value te-checkin-state"></span>';
+      const checkinValue = checkin.querySelector(".te-checkin-state");
+      checkinValue.textContent = checkinView.label;
+      checkinValue.classList.add(checkinView.state);
+      checkinValue.title = checkinView.title || "";
+      meta.append(phone, plan, checkin);
 
       const credit = document.createElement("div");
       credit.className = "te-credit-block";
@@ -1253,6 +1323,35 @@
       if (manual) showToast(error.message || String(error), true);
     } finally {
       if (manual) button.disabled = false;
+    }
+  }
+
+  async function runAccountCheckin() {
+    if (checkinBusy) return;
+    const button = toolbar.querySelector(".te-run-checkin");
+    checkinBusy = true;
+    button.disabled = true;
+    showToast("正在检查全部账号的签到状态...");
+    try {
+      const result = await api("/api/checkin/run", {
+        method: "POST",
+        body: "{}",
+      });
+      await refresh();
+      const summary = [
+        result.checkedIn ? `新签到 ${result.checkedIn}` : "",
+        result.skipped ? `已签到 ${result.skipped}` : "",
+        result.failed ? `失败 ${result.failed}` : "",
+      ].filter(Boolean).join("，");
+      showToast(summary ? `签到完成：${summary}` : "全部账号今日均已签到", result.failed > 0);
+      if (result.checkedIn > 0) {
+        refreshAccountInsights().catch(() => {});
+      }
+    } catch (error) {
+      showToast(error.message || String(error), true);
+    } finally {
+      checkinBusy = false;
+      button.disabled = false;
     }
   }
 
@@ -1731,6 +1830,9 @@
   header.querySelector(".te-close").addEventListener("click", closePanel);
   toolbar.querySelector(".te-refresh").addEventListener("click", () => {
     refreshAccountInsights({ manual: true }).catch(() => {});
+  });
+  toolbar.querySelector(".te-run-checkin").addEventListener("click", () => {
+    runAccountCheckin().catch(() => {});
   });
   toolbar.querySelector(".te-login-new").addEventListener("click", openLoginChoice);
   toolbar.querySelector(".te-export-accounts").addEventListener("click", () => {

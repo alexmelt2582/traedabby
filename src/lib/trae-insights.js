@@ -258,7 +258,7 @@ export function parseTraeAccountInsights({
   };
 }
 
-function authContext(snapshot) {
+export function getTraeAuthContext(snapshot) {
   const authKey = Object.keys(snapshot?.keys || {}).find(
     (key) =>
       key.startsWith(traeStorageKeys.AUTH_PREFIX) &&
@@ -270,9 +270,15 @@ function authContext(snapshot) {
   const accessToken = normalize(auth.accessToken) || normalize(auth.token);
   if (!accessToken) throw new Error("TRAE snapshot is missing an access token");
   const host = normalize(auth.loginHost) || normalize(auth.host) || "https://api.trae.cn";
+  const userId =
+    normalize(auth.userId) ||
+    normalize(auth.user_id) ||
+    normalize(auth.account?.userId) ||
+    normalize(auth.account?.user_id);
   return {
     accessToken,
     host: /^https?:\/\//i.test(host) ? host.replace(/\/$/, "") : `https://${host}`,
+    userId,
   };
 }
 
@@ -292,7 +298,7 @@ async function requestInsights(url, accessToken, body) {
 }
 
 export async function fetchTraeAccountInsights(snapshot, { now = Date.now() } = {}) {
-  const context = authContext(snapshot);
+  const context = getTraeAuthContext(snapshot);
   const results = await Promise.allSettled([
     requestInsights(`${context.host}${PAY_STATUS_PATH}`, context.accessToken, {}),
     requestInsights(`${context.host}${ENTITLEMENT_USAGE_PATH}`, context.accessToken, {

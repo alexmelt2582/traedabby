@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseTraeAccountInsights } from "../src/lib/trae-insights.js";
+import {
+  getTraeAuthContext,
+  parseTraeAccountInsights,
+} from "../src/lib/trae-insights.js";
 
 function pack({
   productType,
@@ -143,4 +146,20 @@ test("missing balance data remains unknown instead of inventing a value", () => 
   assert.equal(insights.quota.model, "unknown");
   assert.equal(insights.quota.fastAvailable, null);
   assert.equal(insights.quota.basicQuota, null);
+});
+
+test("auth context exposes the account user id for per-account requests", () => {
+  const context = getTraeAuthContext({
+    keys: {
+      "iCubeAuthInfo://icube.cloudide": JSON.stringify({
+        accessToken: "test-token",
+        userId: "2504031931479881",
+        loginHost: "api.trae.cn",
+      }),
+    },
+  });
+
+  assert.equal(context.accessToken, "test-token");
+  assert.equal(context.userId, "2504031931479881");
+  assert.equal(context.host, "https://api.trae.cn");
 });

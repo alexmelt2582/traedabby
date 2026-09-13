@@ -18,6 +18,9 @@ The account suite also supports:
   state, reopens TRAE at the login page, and saves the new account automatically.
 - encrypted account export and import using scrypt plus AES-256-GCM, with deduplication
   by account identity and no automatic account switching during import.
+- automatic daily check-in for every saved account. Check-in uses each account's own
+  stable user id as its request device id, so one account does not consume another
+  account's daily check-in slot.
 
 Authentication backups are stored locally under `data/accounts`. Only account-scoped
 `iCube*` keys are replaced or cleared; workspaces, settings, extensions, and window
