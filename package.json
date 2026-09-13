@@ -1,0 +1,18 @@
+{
+  "name": "trae-solo-cn-enhancer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TRAE SOLO CN desktop enhancement assistant",
+  "type": "module",
+  "scripts": {
+    "start": "node src/launcher.js",
+    "daemon": "node src/daemon.js",
+    "doctor": "node scripts/doctor.js",
+    "git:status": "git --git-dir=.git-meta --work-tree=. status --short",
+    "test": "node --test",
+    "check": "node --check src/launcher.js && node --check src/daemon.js && node --check src/ui/inject.js && node --check scripts/doctor.js"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
