@@ -2,6 +2,9 @@
 
 A local, non-invasive enhancement assistant for `TRAE SOLO CN`.
 
+The current release notes are in
+[`docs/releases/v1.0.0.md`](docs/releases/v1.0.0.md).
+
 The project provides:
 
 - a Windows launcher that starts TRAE SOLO CN with a loopback CDP port;
