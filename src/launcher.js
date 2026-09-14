@@ -11,14 +11,22 @@ import {
   LOOPBACK_HOST,
   parsePort,
 } from "./constants.js";
+import { daemonSpec } from "./lib/launch-spec.js";
+import {
+  SOURCES,
+  createWindowsProbe,
+  formatNotFoundHelp,
+  resolveTraeExe,
+} from "./lib/trae-locate.js";
 import {
   isTraeCdpAvailable,
   startTraeWithCdp,
   stopTraeForRestart,
-  traeExecutableExists,
   waitForCdp,
 } from "./lib/trae-process.js";
 import { readTextFile } from "./lib/json-file.js";
+import { loadAppConfig } from "./lib/app-config.js";
+import { proxyChildEnv } from "./lib/net-diagnostics.js";
 import { setTimeout as delay } from "node:timers/promises";
 
 function argumentValue(name) {
@@ -34,8 +42,8 @@ const uiPort = parsePort(
   argumentValue("--ui-port") || process.env.TRAE_ENHANCER_UI_PORT,
   DEFAULT_UI_PORT,
 );
-const exePath =
-  argumentValue("--trae-exe") || process.env.TRAE_ENHANCER_TRAE_EXE || DEFAULT_TRAE_EXE;
+const explicitTraeExe = argumentValue("--trae-exe");
+let exePath = explicitTraeExe || process.env.TRAE_ENHANCER_TRAE_EXE || DEFAULT_TRAE_EXE;
 const userDataDir =
   argumentValue("--user-data-dir") ||
   process.env.TRAE_ENHANCER_USER_DATA_DIR ||
@@ -60,14 +68,15 @@ async function startDaemon() {
   const existing = await daemonHealth();
   if (existing?.ok) return existing;
 
-  const daemonPath = path.join(import.meta.dirname, "daemon.js");
-  const child = spawn(process.execPath, [daemonPath], {
-    cwd: path.resolve(import.meta.dirname, ".."),
+  const launch = daemonSpec();
+  const config = await loadAppConfig(dataDir);
+  const child = spawn(launch.command, launch.args, {
+    cwd: launch.cwd,
     detached: true,
     stdio: "ignore",
     windowsHide: true,
     env: {
-      ...process.env,
+      ...proxyChildEnv({ useEnvProxy: config.useEnvProxy }),
       TRAE_ENHANCER_CDP_PORT: String(cdpPort),
       TRAE_ENHANCER_UI_PORT: String(uiPort),
       TRAE_ENHANCER_DATA_DIR: dataDir,
@@ -87,9 +96,18 @@ async function startDaemon() {
 }
 
 async function main() {
-  if (!(await traeExecutableExists(exePath))) {
-    throw new Error(`TRAE SOLO CN executable was not found: ${exePath}`);
+  const resolved = await resolveTraeExe({
+    dataDir,
+    probe: createWindowsProbe(),
+    explicit: explicitTraeExe,
+  });
+  if (!resolved.path) {
+    throw new Error(formatNotFoundHelp({ attempts: resolved.attempts, dataDir }));
   }
+  exePath = resolved.path;
+  console.log(
+    `[${APP_NAME}] TRAE: ${exePath} (来源: ${SOURCES[resolved.source] ?? resolved.source})`,
+  );
 
   let cdpReady = await isTraeCdpAvailable(cdpPort);
   if (!cdpReady && noRestart) {

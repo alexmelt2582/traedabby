@@ -1,11 +1,10 @@
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const currentDir = path.dirname(fileURLToPath(import.meta.url));
+import { APP_ROOT } from "./lib/app-paths.js";
 
 export const APP_NAME = "TRAE SOLO CN Enhancer";
 export const APP_VERSION = "1.0.0";
-export const PROJECT_ROOT = path.resolve(currentDir, "..");
+export const PROJECT_ROOT = APP_ROOT;
 
 export const DEFAULT_CDP_PORT = 9334;
 export const DEFAULT_UI_PORT = 47834;

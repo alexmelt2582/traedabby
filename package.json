@@ -7,12 +7,20 @@
   "scripts": {
     "start": "node src/launcher.js",
     "daemon": "node src/daemon.js",
+    "service": "node scripts/service.js",
+    "watchdog": "node scripts/watchdog.js",
     "doctor": "node scripts/doctor.js",
+    "build:exe": "node scripts/build-exe.js",
+    "build:installer": "node scripts/win/build-installer.js",
     "git:status": "git --git-dir=.git-meta --work-tree=. status --short",
     "test": "node --test",
-    "check": "node --check src/launcher.js && node --check src/daemon.js && node --check src/ui/inject.js && node --check src/lib/accounts.js && node --check src/lib/secure-transfer.js && node --check src/lib/trae-checkin.js && node --check src/lib/trae-crypto.js && node --check src/lib/trae-fake-logout.js && node --check src/lib/trae-insights.js && node --check src/lib/trae-keepalive.js && node --check src/lib/trae-oauth.js && node --check src/lib/trae-process.js && node --check src/lib/trae-refresh.js && node --check src/lib/storage-transaction.js && node --check scripts/doctor.js"
+    "check": "node scripts/check-syntax.js"
   },
   "engines": {
     "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "postject": "^1.0.0-alpha.6"
   }
 }

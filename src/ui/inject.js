@@ -1370,18 +1370,27 @@
       if (generation !== insightsRefreshGeneration) return;
       await refresh();
       if (manual) {
-        showToast(
-          result.failed
-            ? `额度已更新，${result.failed} 个账号失败`
-            : "账号额度已更新",
-          result.failed > 0,
-        );
+        const details = failureDetails(result);
+        const base = result.failed
+          ? `额度已更新，${result.failed} 个账号失败`
+          : "账号额度已更新";
+        showToast(details ? `${base} — ${details}` : base, result.failed > 0);
       }
     } catch (error) {
       if (manual) showToast(error.message || String(error), true);
     } finally {
       if (manual) button.disabled = false;
     }
+  }
+
+  function failureDetails(result) {
+    const failures = Array.isArray(result?.results)
+      ? result.results.filter((entry) => entry && entry.ok === false && entry.error)
+      : [];
+    if (!failures.length) return "";
+    const shown = failures.slice(0, 2).map((entry) => String(entry.error));
+    const extra = failures.length - shown.length;
+    return `${shown.join(" / ")}${extra > 0 ? ` （另有 ${extra} 个）` : ""}`;
   }
 
   async function runAccountCheckin() {
@@ -1401,7 +1410,9 @@
         result.skipped ? `已签到 ${result.skipped}` : "",
         result.failed ? `失败 ${result.failed}` : "",
       ].filter(Boolean).join("，");
-      showToast(summary ? `签到完成：${summary}` : "全部账号今日均已签到", result.failed > 0);
+      const details = failureDetails(result);
+      const base = summary ? `签到完成：${summary}` : "全部账号今日均已签到";
+      showToast(details ? `${base} — ${details}` : base, result.failed > 0);
       if (result.checkedIn > 0) {
         refreshAccountInsights().catch(() => {});
       }

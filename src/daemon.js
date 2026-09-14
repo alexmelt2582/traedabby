@@ -17,12 +17,17 @@ import {
   parsePort,
 } from "./constants.js";
 import { AccountStore } from "./lib/accounts.js";
+import { UI_INJECT_PATH } from "./lib/app-paths.js";
+import { createDaemonLogger } from "./lib/daemon-log.js";
+import { detectSeaApi, loadInjectSource, renderInjectScript } from "./lib/inject-source.js";
 import { readJsonFile, readTextFile, writeTextAtomic } from "./lib/json-file.js";
+import { DAEMON_LOG_PATH } from "./lib/runtime-paths.js";
 import {
   createAccountsExport,
   openAccountsExport,
 } from "./lib/secure-transfer.js";
 import { normalizeAuthSnapshotForInjection } from "./lib/trae-storage.js";
+import { SOURCES, createWindowsProbe, resolveTraeExe } from "./lib/trae-locate.js";
 import {
   claimCheckin,
   fetchCheckinStatus,
@@ -61,7 +66,12 @@ const CDP_PORT = parsePort(process.env.TRAE_ENHANCER_CDP_PORT, DEFAULT_CDP_PORT)
 const UI_PORT = parsePort(process.env.TRAE_ENHANCER_UI_PORT, DEFAULT_UI_PORT);
 const DATA_DIR = process.env.TRAE_ENHANCER_DATA_DIR || DEFAULT_DATA_DIR;
 const STORAGE_PATH = process.env.TRAE_ENHANCER_STORAGE_PATH || DEFAULT_STORAGE_PATH;
-const TRAE_EXE = process.env.TRAE_ENHANCER_TRAE_EXE || DEFAULT_TRAE_EXE;
+/**
+ * Resolved at startup from the configuration file and live detection. The
+ * daemon must still run when TRAE is absent, because check-in and keep-alive
+ * work from stored credentials; only the flows that restart TRAE need a path.
+ */
+let TRAE_EXE = process.env.TRAE_ENHANCER_TRAE_EXE || DEFAULT_TRAE_EXE;
 const API_TOKEN_PATH = path.join(DATA_DIR, "api-token");
 const LEGACY_TRANSACTION_DIR = path.join(DATA_DIR, "transactions");
 const FAKE_LOGOUT_SESSION_PATH = path.join(DATA_DIR, "fake-logout", "session.json");
@@ -97,12 +107,13 @@ async function getApiToken() {
   return token;
 }
 
-async function buildInjectScript(apiToken) {
-  const source = await readTextFile(path.join(import.meta.dirname, "ui", "inject.js"));
-  return source
-    .replaceAll("__API_BASE__", `http://${LOOPBACK_HOST}:${UI_PORT}`)
-    .replaceAll("__API_TOKEN__", apiToken)
-    .replaceAll("__APP_VERSION__", APP_VERSION);
+async function buildInjectScript(apiToken, seaApi) {
+  const source = await loadInjectSource({ fallbackPath: UI_INJECT_PATH, seaApi });
+  return renderInjectScript(source, {
+    apiBase: `http://${LOOPBACK_HOST}:${UI_PORT}`,
+    apiToken,
+    appVersion: APP_VERSION,
+  });
 }
 
 function jsonResponse(response, status, body) {
@@ -136,7 +147,13 @@ function requireApiToken(request, apiToken) {
 
 async function stopTraeForSwitch() {
   if (!(await traeExecutableExists(TRAE_EXE))) {
-    throw new Error(`TRAE SOLO CN executable was not found: ${TRAE_EXE}`);
+    throw new Error(
+      [
+        `TRAE SOLO CN 的可执行文件不存在：${TRAE_EXE}`,
+        "请先指定一次路径，之后会被记住：",
+        '  TraeEnhancer.exe configure --trae-exe "D:\\路径\\TRAE SOLO CN.exe"',
+      ].join("\n"),
+    );
   }
   await stopTraeForRestart(TRAE_EXE);
   await delay(700);
@@ -917,16 +934,60 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
   jsonResponse(response, 404, { ok: false, error: "Not found" });
 }
 
+/**
+ * Routes every console call through the redacting file logger, so a failure on a
+ * user machine leaves evidence without any risk of a credential reaching disk.
+ * Returning the logger lets callers flush or inspect the path.
+ */
+function installLogging() {
+  const logger = createDaemonLogger({ logPath: DAEMON_LOG_PATH });
+  console.log = (...values) => logger.info(...values);
+  console.info = (...values) => logger.info(...values);
+  console.warn = (...values) => logger.warn(...values);
+  console.error = (...values) => logger.error(...values);
+
+  process.on("uncaughtException", (error) => {
+    logger.error(`uncaught exception: ${error?.stack || error}`);
+    process.exit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    logger.error(`unhandled rejection: ${reason?.stack || reason}`);
+    process.exit(1);
+  });
+  return logger;
+}
+
 async function main() {
   await fs.mkdir(DATA_DIR, { recursive: true });
+  installLogging();
   const purgedTransactionDirectory = await purgeLegacyTransactionDirectory(
     LEGACY_TRANSACTION_DIR,
   );
   const accountRepair = await accountStore.repairIndex();
   const apiToken = await getApiToken();
+  const seaApi = await detectSeaApi();
+
+  const traeResolution = await resolveTraeExe({
+    dataDir: DATA_DIR,
+    probe: createWindowsProbe(),
+  });
+  if (traeResolution.path) {
+    TRAE_EXE = traeResolution.path;
+    console.log(
+      `[trae] ${TRAE_EXE} (来源: ${SOURCES[traeResolution.source] ?? traeResolution.source})`,
+    );
+  } else {
+    console.warn(
+      "[trae] 未找到 TRAE SOLO CN：账号切换与登录流程不可用；签到与保活不受影响。",
+    );
+    console.warn(
+      '[trae] 请运行 configure --trae-exe "D:\\路径\\TRAE SOLO CN.exe" 指定一次，之后会记住。',
+    );
+  }
+
   const cdpClient = new CdpClient({
     port: CDP_PORT,
-    getInjectScript: () => buildInjectScript(apiToken),
+    getInjectScript: () => buildInjectScript(apiToken, seaApi),
     onStateChange: (connected) => {
       cdpConnected = connected;
     },
@@ -934,7 +995,7 @@ async function main() {
   const oauthManager = new TraeOAuthManager({
     accountStore,
     storagePath: STORAGE_PATH,
-    exePath: process.env.TRAE_ENHANCER_TRAE_EXE || DEFAULT_TRAE_EXE,
+    exePath: TRAE_EXE,
     openBrowser: process.env.TRAE_ENHANCER_OPEN_BROWSER !== "0",
   });
   const fakeLogoutManager = new TraeFakeLogoutManager({
