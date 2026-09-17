@@ -20,6 +20,19 @@ import path from "node:path";
 export const AUTOSTART_VBS_NAME = "daemon-autostart.vbs";
 export const AUTOSTART_SHORTCUT_NAME = "TRAE SOLO CN Enhancer";
 
+/**
+ * The user-facing entry point for a packaged build.
+ *
+ * The bundled binary is a console-subsystem program, so launching it directly
+ * always opens a console window. `wscript.exe` runs this with no console of its
+ * own, and the window style handed to `sh.Run` keeps the child hidden as well.
+ * The shortcuts the installer creates point here rather than at the executable.
+ *
+ * Only the launch entry is hidden. Commands such as `stop` keep their console on
+ * purpose: the user asked for something to happen and should see it reported.
+ */
+export const LAUNCH_VBS_NAME = "launch-hidden.vbs";
+
 const NON_ASCII = /[^\x00-\x7f]/;
 
 export function findNonAscii(text) {
@@ -86,6 +99,38 @@ export function autostartVbsPath(projectRoot) {
   return path.join(projectRoot, "scripts", AUTOSTART_VBS_NAME);
 }
 
+export function launchVbsPath(projectRoot) {
+  return path.join(projectRoot, "scripts", LAUNCH_VBS_NAME);
+}
+
+/**
+ * The text shown when the launcher cannot find the executable. It must stay pure
+ * ASCII because the script is written as ANSI, and it must not interpolate a path
+ * because the project path can contain non-ASCII characters — the script appends
+ * its own resolved path instead.
+ */
+export const LAUNCH_MISSING_EXE_MESSAGE =
+  "TRAE SOLO CN Enhancer cannot start: TraeEnhancer.exe was not found next to this script. "
+  + "Re-extract the package, or restore the file if antivirus removed it.";
+
+/**
+ * The single definition of the no-console launcher, shared by the build and its
+ * test so the two cannot drift apart.
+ *
+ * The desktop and start-menu shortcuts point here rather than at the executable:
+ * the executable is a console-subsystem program, so launching it directly always
+ * opens a console window. Everything specific to that use — the `start` argument,
+ * the bundled shape, the visible error when the executable is gone — lives here.
+ */
+export function buildLaunchVbs({ nodePath }) {
+  return buildAutostartVbs({
+    nodePath,
+    bundled: true,
+    flags: ["start"],
+    missingExeMessage: LAUNCH_MISSING_EXE_MESSAGE,
+  });
+}
+
 /**
  * Window style 0 keeps the watchdog fully hidden when it starts at logon.
  *
@@ -95,12 +140,21 @@ export function autostartVbsPath(projectRoot) {
  * - bundled executable: the watchdog lives inside the executable and is reached
  *   through the internal argv switch, so there is no script path at all and
  *   falling back to a bare `node.exe` would be wrong.
+ *
+ * `missingExeMessage` turns the "executable is gone" case from a silent no-op
+ * into a visible one. It matters for the desktop/start-menu launcher: when the
+ * file was quarantined by antivirus, skipped by a partial extraction, or moved
+ * by hand, a double-click would otherwise do nothing at all and the user has no
+ * way to tell a broken install from a launcher that never ran. It stays unset
+ * for the logon entry on purpose — a modal box on every logon would be worse
+ * than the silence. The text must be pure ASCII: the file is written as ANSI.
  */
 export function buildAutostartVbs({
   nodePath,
   bundled = false,
   relativeScriptPath = "scripts\\watchdog.js",
   flags = ["--quiet"],
+  missingExeMessage = "",
 }) {
   const node = asciiLiteralOrFallback(nodePath, "node.exe");
   const suffix = flags.length ? ` ${flags.join(" ")}` : "";
@@ -112,6 +166,22 @@ export function buildAutostartVbs({
     "here = fso.GetParentFolderName(WScript.ScriptFullName)",
     "root = fso.GetParentFolderName(here)",
   ];
+
+  // Spelled out as a block rather than `If cond Then stmt : stmt`. VBScript's
+  // single-line If treats everything up to the end of the line as its clause, so
+  // the colon form reads as one statement and silently does the opposite of what
+  // it looks like. A failure path that must always fire is not the place to rely
+  // on that reading.
+  const guard = (condition, exitCode) => {
+    if (!missingExeMessage) {
+      lines.push(`If ${condition} Then WScript.Quit ${exitCode}`);
+      return;
+    }
+    lines.push(`If ${condition} Then`);
+    lines.push(`  MsgBox ${vbsQuote(missingExeMessage)} & vbCrLf & vbCrLf & nodeExe, 48, "TRAE SOLO CN Enhancer"`);
+    lines.push(`  WScript.Quit ${exitCode}`);
+    lines.push("End If");
+  };
 
   if (bundled) {
     // The executable path may contain non-ASCII characters and therefore cannot
@@ -126,14 +196,14 @@ export function buildAutostartVbs({
       );
     }
     lines.push(`nodeExe = root & "\\" & ${vbsQuote(exeName)}`);
-    lines.push("If Not fso.FileExists(nodeExe) Then WScript.Quit 2");
+    guard("Not fso.FileExists(nodeExe)", 2);
     lines.push("sh.CurrentDirectory = root");
     lines.push(`sh.Run Chr(34) & nodeExe & Chr(34) & ${vbsQuote(suffix)}, 0, False`);
   } else {
     lines.push(`nodeExe = ${vbsQuote(node)}`);
     lines.push('If Not fso.FileExists(nodeExe) Then nodeExe = "node.exe"');
     lines.push(`scriptPath = root & "\\" & ${vbsQuote(relativeScriptPath)}`);
-    lines.push("If Not fso.FileExists(scriptPath) Then WScript.Quit 1");
+    guard("Not fso.FileExists(scriptPath)", 1);
     lines.push("sh.CurrentDirectory = root");
     lines.push(
       `sh.Run Chr(34) & nodeExe & Chr(34) & " " & Chr(34) & scriptPath & Chr(34) & ${vbsQuote(suffix)}, 0, False`,

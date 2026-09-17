@@ -6,6 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { APP_VERSION } from "../src/constants.js";
+import { buildAutostartVbs, buildLaunchVbs } from "../src/lib/autostart.js";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
@@ -23,6 +24,52 @@ test("entry scripts stay pure ASCII without a BOM", async () => {
   }
 });
 
+test("the packaged launcher hides its console and stays pure ASCII", () => {
+  // Exactly what `npm run build:exe` writes — same builder, so this cannot drift.
+  const vbs = buildLaunchVbs({
+    nodePath: path.join(PROJECT_ROOT, "dist", "portable", "TraeEnhancer.exe"),
+  });
+  // wscript.exe reads a .vbs as ANSI, so a non-ASCII byte here would be mojibake.
+  assert.equal(Buffer.from(vbs, "utf8").some((byte) => byte > 0x7f), false);
+  // The project path may contain non-ASCII characters and must never be embedded;
+  // the script resolves its own location at runtime instead.
+  assert.equal(vbs.includes(PROJECT_ROOT), false, "the project path must not be embedded");
+  // Window style 0 and no wait: this is what keeps the console from appearing.
+  assert.ok(vbs.includes(", 0, False"), "the launch must use a hidden window style");
+  assert.ok(vbs.includes('" start"'), "the launch must run the start command");
+});
+
+test("the packaged launcher reports a missing executable instead of doing nothing", () => {
+  const vbs = buildLaunchVbs({
+    nodePath: path.join(PROJECT_ROOT, "dist", "portable", "TraeEnhancer.exe"),
+  });
+
+  // A desktop shortcut that silently quits is indistinguishable from one that
+  // never ran: a quarantined executable or a partial extraction has to be said
+  // out loud, and the box must still exit afterwards.
+  assert.match(
+    vbs,
+    /If Not fso\.FileExists\(nodeExe\) Then\r\n\s+MsgBox .+?\r\n\s+WScript\.Quit 2\r\nEnd If/,
+  );
+  // The resolved path is appended by the script, never baked in.
+  assert.ok(vbs.includes("& vbCrLf & vbCrLf & nodeExe"), "the dialog must name the path it looked in");
+  // Warning icon with an explicit title, and above all no single-line `If ... : `
+  // form, whose clause VBScript reads to the end of the line.
+  assert.ok(vbs.includes(", 48, \"TRAE SOLO CN Enhancer\""), "the dialog needs a title and warning icon");
+  assert.equal(/Then .*:/.test(vbs), false, "no single-line If with a colon clause");
+});
+
+test("the logon entry stays silent when the executable is missing", () => {
+  // The opposite choice on purpose: a modal box at every logon would be worse
+  // than the silence, so the shared builder must keep MsgBox opt-in.
+  const vbs = buildAutostartVbs({
+    nodePath: path.join(PROJECT_ROOT, "dist", "portable", "TraeEnhancer.exe"),
+    bundled: true,
+    flags: ["--quiet"],
+  });
+  assert.equal(vbs.includes("MsgBox"), false, "autostart must not pop a dialog");
+});
+
 test("the cmd entry supports both source-build and portable layouts", async () => {
   const text = (await read("scripts/trae-enhancer.cmd")).toString("ascii");
   assert.match(text, /dist\\TraeEnhancer\.exe/);
@@ -34,6 +81,34 @@ test("the installer script keeps its required UTF-8 BOM", async () => {
   const bytes = await read("scripts/win/trae-enhancer.iss");
   assert.equal(bytes.subarray(0, 3).equals(UTF8_BOM), true);
   assert.match(bytes.toString("utf8"), /登录时自动启动后台服务/);
+});
+
+test("the installer launches through the hidden entry point, not the executable", async () => {
+  const text = (await read("scripts/win/trae-enhancer.iss")).toString("utf8");
+
+  // Packaged at all: without this the shortcut points at a missing file.
+  assert.ok(
+    text.includes("Source: \"{#StageRoot}\\scripts\\launch-hidden.vbs\""),
+    "launch-hidden.vbs must be part of the installer payload",
+  );
+
+  // Every entry that *starts* the app must go through the launcher. The bundled
+  // executable is a console program, so a shortcut pointing straight at it opens
+  // a console window — the defect this replaced. The "stop" entry keeps the
+  // executable on purpose, so it is not matched here.
+  const launching = text
+    .split(/\r?\n/)
+    .filter(
+      (line) =>
+        line.startsWith('Name: "{group}\\{#ProductName}"') ||
+        line.startsWith('Name: "{userdesktop}\\{#ProductName}"') ||
+        line.startsWith('Filename: "{sys}\\wscript.exe"'),
+    );
+  assert.equal(launching.length, 3, "expected the two shortcuts and the post-install run");
+  for (const line of launching) {
+    assert.ok(line.includes("launch-hidden.vbs"), line);
+    assert.equal(line.includes("{#ProductExe}"), false, line);
+  }
 });
 
 test("the third-party Simplified Chinese translation is not rewritten", async () => {

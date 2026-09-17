@@ -17,6 +17,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
+import { buildLaunchVbs, LAUNCH_VBS_NAME } from "../src/lib/autostart.js";
+
 const execFileAsync = promisify(execFile);
 const BUILD_SCRIPT_DIR = path.dirname(path.resolve(process.argv[1]));
 const PROJECT_ROOT = path.resolve(BUILD_SCRIPT_DIR, "..");
@@ -182,11 +184,34 @@ async function assemblePortableFolder() {
   await fs.copyFile(ENTRIES.trayScript, path.join(PORTABLE_DIR, "scripts", "tray.ps1"));
   await fs.copyFile(ENTRIES.cmdEntry, path.join(PORTABLE_DIR, "scripts", "trae-enhancer.cmd"));
   await fs.copyFile(ENTRIES.readme, path.join(PORTABLE_DIR, "README.md"));
+
+  // The shortcuts the installer creates point here rather than at the executable:
+  // the executable is a console-subsystem program, so launching it directly always
+  // opens a console window. `buildLaunchVbs` is the one place that shape is
+  // defined, so a test can assert on exactly what gets shipped.
+  const launchVbsPath = path.join(PORTABLE_DIR, "scripts", LAUNCH_VBS_NAME);
+  const launchVbs = buildLaunchVbs({ nodePath: PORTABLE_EXE_PATH });
+  await fs.writeFile(launchVbsPath, launchVbs, "ascii");
+  // Falsifiable: without the hidden window style the shortcut would show a
+  // console, which is the exact defect this file exists to remove.
+  const writtenLaunchVbs = await fs.readFile(launchVbsPath, "utf8");
+  if (!writtenLaunchVbs.includes(", 0, False")) {
+    throw new Error(`${LAUNCH_VBS_NAME} does not hide its window; the launcher would show a console`);
+  }
+  if (!writtenLaunchVbs.includes('" start"')) {
+    throw new Error(`${LAUNCH_VBS_NAME} does not launch the start command`);
+  }
+  if (!writtenLaunchVbs.includes("MsgBox")) {
+    throw new Error(`${LAUNCH_VBS_NAME} would fail silently when the executable is missing`);
+  }
+  log(`wrote scripts\\${LAUNCH_VBS_NAME} (hidden launch of \`start\`)`);
+
   for (const relative of [
     EXE_NAME,
     "README.md",
     path.join("scripts", "trae-enhancer.cmd"),
     path.join("scripts", "tray.ps1"),
+    path.join("scripts", LAUNCH_VBS_NAME),
   ]) {
     await assertExists(path.join(PORTABLE_DIR, relative), `portable ${relative}`);
   }

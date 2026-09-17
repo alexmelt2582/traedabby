@@ -67,14 +67,17 @@ Source: "{#StageRoot}\{#ProductExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageRoot}\scripts\trae-enhancer.cmd"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "{#StageRoot}\scripts\tray.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "{#StageRoot}\scripts\launch-hidden.vbs"; DestDir: "{app}\scripts"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#ProductName}"; Filename: "{app}\{#ProductExe}"; WorkingDir: "{app}"; Comment: "启动 TRAE SOLO CN 与增强面板"
+; 两个启动项都指向隐藏启动器，而不是可执行文件：可执行文件是控制台子系统程序，
+; 直接启动必定弹出黑窗口。停止项保留控制台是刻意的——用户点了停止，应当看到结果。
+Name: "{group}\{#ProductName}"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\launch-hidden.vbs"""; WorkingDir: "{app}"; Comment: "启动 TRAE SOLO CN 与增强面板"
 Name: "{group}\停止后台服务"; Filename: "{app}\{#ProductExe}"; Parameters: "stop"; WorkingDir: "{app}"
-Name: "{userdesktop}\{#ProductName}"; Filename: "{app}\{#ProductExe}"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{userdesktop}\{#ProductName}"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\launch-hidden.vbs"""; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#ProductExe}"; Parameters: "start"; WorkingDir: "{app}"; Description: "立即启动 TRAE SOLO CN 与增强面板"; Flags: nowait postinstall skipifsilent
+Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\launch-hidden.vbs"""; WorkingDir: "{app}"; Description: "立即启动 TRAE SOLO CN 与增强面板"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 Filename: "{app}\{#ProductExe}"; Parameters: "tray-stop"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "StopTray"
