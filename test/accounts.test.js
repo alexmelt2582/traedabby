@@ -58,6 +58,10 @@ test("backup updates one identity instead of creating duplicates", async () => {
     const second = await store.backupCurrent(storageFixture(), { now: 200 });
     assert.equal(first.account.id, second.account.id);
     assert.equal((await store.list()).length, 1);
+    // The daemon logs this flag when it adopts the signed-in account on its own, and
+    // the panel's fallback path can run at the same time — both must be safe.
+    assert.equal(first.createdSnapshot, true);
+    assert.equal(second.createdSnapshot, false);
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }

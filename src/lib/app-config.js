@@ -190,12 +190,55 @@ export function normalizeTraeUpdate(raw) {
   return { suppress, previousMode };
 }
 
+/**
+ * Automatic check-in.
+ *
+ * These fields never reject a value: anything unrecognized falls back to the
+ * default instead of failing the whole file. Every other setting here is strict
+ * because a wrong value stays invisible until much later, but a check-in
+ * interval has no such failure mode — the panel only offers the fixed options
+ * below, so an odd value can only come from hand-editing, and refusing to start
+ * the daemon over it would cost far more than ignoring it. The effective value
+ * is echoed back to the panel on every read, so a fallback is never hidden.
+ */
+export const CHECKIN_INTERVALS = [15, 30, 60, 120];
+export const CHECKIN_DEFAULTS = { auto: true, intervalMinutes: 30, onClientLoad: true };
+
+function normalizeCheckinFlag(value, fallback) {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (TRUE_WORDS.has(normalized)) return true;
+    if (FALSE_WORDS.has(normalized)) return false;
+  }
+  return fallback;
+}
+
+export function normalizeCheckinInterval(value) {
+  const numeric = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
+  return CHECKIN_INTERVALS.includes(numeric) ? numeric : CHECKIN_DEFAULTS.intervalMinutes;
+}
+
+export function normalizeCheckin(raw) {
+  if (raw === null || raw === undefined) return { ...CHECKIN_DEFAULTS };
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("config.checkin must be a JSON object");
+  }
+  return {
+    auto: normalizeCheckinFlag(raw.auto, CHECKIN_DEFAULTS.auto),
+    intervalMinutes: normalizeCheckinInterval(raw.intervalMinutes),
+    onClientLoad: normalizeCheckinFlag(raw.onClientLoad, CHECKIN_DEFAULTS.onClientLoad),
+  };
+}
+
 export function normalizeConfig(raw) {
   if (raw === null || raw === undefined) {
     return {
       traeExe: null,
       proxy: { mode: "system", url: null, noProxy: "" },
       traeUpdate: { suppress: true, previousMode: null },
+      checkin: { ...CHECKIN_DEFAULTS },
     };
   }
   if (typeof raw !== "object" || Array.isArray(raw)) {
@@ -205,6 +248,7 @@ export function normalizeConfig(raw) {
     traeExe: normalizeTraeExe(raw.traeExe),
     proxy: normalizeProxyConfig(raw.proxy, raw.useEnvProxy),
     traeUpdate: normalizeTraeUpdate(raw.traeUpdate),
+    checkin: normalizeCheckin(raw.checkin),
   };
 }
 

@@ -20,9 +20,11 @@ import {
 } from "./constants.js";
 import { AccountStore } from "./lib/accounts.js";
 import {
+  CHECKIN_INTERVALS,
   PROXY_MODES,
   configPath,
   loadAppConfig,
+  normalizeCheckin,
   normalizeProxyConfig,
   normalizeTraeUpdate,
   saveAppConfig,
@@ -111,7 +113,6 @@ const API_TOKEN_PATH = path.join(DATA_DIR, "api-token");
 const LEGACY_TRANSACTION_DIR = path.join(DATA_DIR, "transactions");
 const FAKE_LOGOUT_SESSION_PATH = path.join(DATA_DIR, "fake-logout", "session.json");
 const MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024;
-const AUTO_CHECKIN_INTERVAL_MS = 30 * 60 * 1000;
 const AUTO_KEEPALIVE_ENABLED = process.env.TRAE_ENHANCER_AUTO_KEEPALIVE !== "0";
 const AUTO_KEEPALIVE_INTERVAL_MS = parseDuration(
   process.env.TRAE_ENHANCER_KEEPALIVE_INTERVAL_MS,
@@ -142,6 +143,13 @@ let keepaliveInFlight = null;
  */
 let daemonShutdown = null;
 let daemonRestartRequested = false;
+
+/**
+ * Assigned by `main()` next to the timers themselves. `POST /api/settings/checkin`
+ * has to reach the running schedule, and a hook keeps `route()` out of the
+ * timers' local state.
+ */
+let rescheduleAutoCheckin = null;
 
 /**
  * Set at start-up when this run actually changed TRAE's settings file, so the
@@ -271,6 +279,21 @@ function proxySettingsPayload({ config, systemRead, resolved }) {
     envProxyEnabled: proxyEnvEnabled(),
     envReport: proxyEnvReport(),
     configPath: configPath(DATA_DIR),
+  };
+}
+
+/**
+ * Automatic check-in as the panel renders it.
+ *
+ * `options` is published from here rather than hard-coded in the panel, so the
+ * allowed intervals cannot drift between the two.
+ */
+function checkinSettingsPayload(checkin) {
+  return {
+    auto: checkin.auto,
+    intervalMinutes: checkin.intervalMinutes,
+    onClientLoad: checkin.onClientLoad,
+    options: [...CHECKIN_INTERVALS],
   };
 }
 
@@ -975,11 +998,19 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
   }
 
   if (request.method === "POST" && pathname === "/api/accounts/backup") {
-    const storageRoot = await readJsonFile(STORAGE_PATH);
-    const liveIdentity = await cdpClient.getLiveIdentity();
-    const result = await accountStore.backupCurrent(storageRoot, { liveIdentity });
-    await notifyAccountsUpdated(cdpClient);
-    jsonResponse(response, 200, { ok: true, ...result });
+    // Logged here rather than left to the generic handler: the panel's empty state
+    // cannot tell "no accounts saved yet" from "adoption failed", so this line is
+    // the only place that distinction survives.
+    try {
+      const storageRoot = await readJsonFile(STORAGE_PATH);
+      const liveIdentity = await cdpClient.getLiveIdentity();
+      const result = await accountStore.backupCurrent(storageRoot, { liveIdentity });
+      await notifyAccountsUpdated(cdpClient);
+      jsonResponse(response, 200, { ok: true, ...result });
+    } catch (error) {
+      console.error(`[backup] could not save the current account: ${error.message || error}`);
+      jsonResponse(response, 500, { ok: false, error: error.message || String(error) });
+    }
     return;
   }
 
@@ -1398,6 +1429,7 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
     jsonResponse(response, 200, {
       ok: true,
       network: proxySettingsPayload(settings),
+      checkin: checkinSettingsPayload(settings.config.checkin),
       traeUpdate: {
         ...traeUpdatePayload(updateState, { suppress: settings.config.traeUpdate.suppress }),
         startupNotice: traeUpdateStartupNotice,
@@ -1437,6 +1469,30 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
         backupPath: result.backupPath,
       }),
     });
+    return;
+  }
+
+  if (request.method === "POST" && pathname === "/api/settings/checkin") {
+    const body = await readRequestBody(request);
+    const current = await loadAppConfig(DATA_DIR);
+    // Every field is optional and an omitted one keeps its current value: the
+    // panel submits the three controls as one form, but a partial request must
+    // not quietly reset the rest to the defaults.
+    const checkin = normalizeCheckin({
+      ...current.checkin,
+      ...(body?.auto === undefined ? {} : { auto: body.auto }),
+      ...(body?.intervalMinutes === undefined ? {} : { intervalMinutes: body.intervalMinutes }),
+      ...(body?.onClientLoad === undefined ? {} : { onClientLoad: body.onClientLoad }),
+    });
+    await saveAppConfig(DATA_DIR, { checkin });
+    // Unlike the proxy, this takes effect in the running process: the schedule is
+    // rebuilt here, and every later trigger re-reads the configuration. No
+    // restart, and no "restart to apply" notice in the panel.
+    rescheduleAutoCheckin?.({ initialRun: false });
+    console.log(
+      `[settings] checkin auto=${checkin.auto} interval=${checkin.intervalMinutes} onClientLoad=${checkin.onClientLoad}`,
+    );
+    jsonResponse(response, 200, { ok: true, checkin: checkinSettingsPayload(checkin) });
     return;
   }
 
@@ -1535,11 +1591,155 @@ async function main() {
     );
   }
 
+  /* ------------------------------------------------------------------------ *
+   * Automatic check-in
+   *
+   * The schedule and both on/off switches come from `config.checkin`, and every
+   * trigger re-reads the configuration instead of closing over the copy loaded at
+   * start-up: `POST /api/settings/checkin` has to take effect in the running
+   * process, and a captured value would silently ignore it.
+   *
+   * All four helpers are function declarations so that `onStateChange` below can
+   * reference them before their textual position.
+   * ------------------------------------------------------------------------ */
+
+  let autoCheckinTimer = null;
+  let autoCheckinStartTimer = null;
+  /** Re-armed on every disconnect: one run per TRAE session, not per reconnect. */
+  let clientLoadCheckinDone = false;
+  /** Set on the first attempt, success or failure: a later reconnect must not
+   * adopt an account the user has since removed by hand. */
+  let adoptAttempted = false;
+
+  async function runScheduledCheckin(reason) {
+    if (
+      switchInFlight ||
+      loginStartInFlight ||
+      oauthManager.isActive() ||
+      fakeLogoutManager.isActive() ||
+      insightsRefreshInFlight ||
+      checkinInFlight ||
+      keepaliveInFlight
+    ) {
+      // Another sweep is already doing the same work; it will push when it is done.
+      return;
+    }
+    try {
+      const cockpit = await resolveCockpitPolicy();
+      if (cockpit.action === "skip") {
+        console.log(`[checkin] ${reason} skipped because Cockpit Tools is running`);
+        return;
+      }
+      const result = await runAccountCheckin(null, {
+        force: false,
+        reason,
+        allowTokenRefresh: cockpit.action !== "no-token-refresh",
+      });
+      console.log(
+        `[checkin] ${reason} checked=${result.checkedIn} skipped=${result.skipped} failed=${result.failed}`,
+      );
+      await notifyAccountsUpdated(cdpClient);
+    } catch (error) {
+      console.error(`[checkin] ${reason} run failed: ${error.message || error}`);
+    }
+  }
+
+  /**
+   * Rebuilds the schedule from the saved configuration.
+   *
+   * `initialRun` is only ever true on the start-up path. A settings change must
+   * rebuild the interval without claiming a reward as a side effect, so the
+   * caller passes false.
+   */
+  async function scheduleAutoCheckin({ initialRun = false } = {}) {
+    clearTimeout(autoCheckinStartTimer);
+    clearInterval(autoCheckinTimer);
+    autoCheckinStartTimer = null;
+    autoCheckinTimer = null;
+
+    if (process.env.TRAE_ENHANCER_AUTO_CHECKIN === "0") return;
+
+    let config;
+    try {
+      config = await loadAppConfig(DATA_DIR);
+    } catch (error) {
+      console.error(`[checkin] could not read the configuration: ${error.message || error}`);
+      return;
+    }
+    if (!config.checkin.auto) {
+      console.log("[checkin] automatic check-in is disabled by configuration");
+      return;
+    }
+
+    if (initialRun) {
+      autoCheckinStartTimer = setTimeout(() => void runScheduledCheckin("scheduled"), 5000);
+      autoCheckinStartTimer.unref?.();
+    }
+    autoCheckinTimer = setInterval(
+      () => void runScheduledCheckin("scheduled"),
+      config.checkin.intervalMinutes * 60 * 1000,
+    );
+    autoCheckinTimer.unref?.();
+  }
+
+  /**
+   * Adopts the account that is already signed in, the first time TRAE becomes
+   * reachable.
+   *
+   * The panel opens on a list, never on a live lookup, so this used to happen
+   * only inside the panel's own open flow — one attempt, no retry, and a failure
+   * that looked exactly like "no accounts saved yet". Doing it here removes the
+   * dependence on the moment the panel happened to be opened, and keeps the panel
+   * a pure view instead of giving it a retry loop.
+   */
+  async function adoptCurrentAccount() {
+    if (adoptAttempted) return;
+    adoptAttempted = true;
+    try {
+      if ((await accountStore.list()).length) return;
+      const storageRoot = await readJsonFile(STORAGE_PATH);
+      const active = await accountStore.resolveActiveAccount(storageRoot);
+      if (active.state !== "not-managed") {
+        // `unknown` means the live identity could not be read at all. TRAE may
+        // simply not be signed in yet, which is not a failure worth a stack trace.
+        console.log(`[adopt] no account adopted (state=${active.state})`);
+        return;
+      }
+      const liveIdentity = await cdpClient.getLiveIdentity();
+      const result = await accountStore.backupCurrent(storageRoot, { liveIdentity });
+      console.log(`[adopt] adopted the signed-in account (created=${result.createdSnapshot})`);
+      await notifyAccountsUpdated(cdpClient);
+    } catch (error) {
+      console.error(`[adopt] could not adopt the current account: ${error.message || error}`);
+    }
+  }
+
+  /** The client-load trigger, the equivalent of one run per page navigation. */
+  async function runClientLoadCheckin() {
+    try {
+      const config = await loadAppConfig(DATA_DIR);
+      if (!config.checkin.auto || !config.checkin.onClientLoad) return;
+      await runScheduledCheckin("client-load");
+    } catch (error) {
+      console.error(`[checkin] client-load run failed: ${error.message || error}`);
+    }
+  }
+
   const cdpClient = new CdpClient({
     port: CDP_PORT,
     getInjectScript: () => buildInjectScript(apiToken, seaApi),
     onStateChange: (connected) => {
       cdpConnected = connected;
+      if (!connected) {
+        clientLoadCheckinDone = false;
+        return;
+      }
+      if (clientLoadCheckinDone) return;
+      clientLoadCheckinDone = true;
+      // This callback is synchronous, and awaiting here would stall the CDP
+      // client's own state handling.
+      void adoptCurrentAccount();
+      void runClientLoadCheckin();
     },
   });
   const oauthManager = new TraeOAuthManager({
@@ -1613,45 +1813,11 @@ async function main() {
     console.error(`[trae-update] TRAE 设置文件无法读写：${traeUpdateStartupError}`);
   }
 
-  let autoCheckinTimer = null;
-  let autoCheckinStartTimer = null;
-  if (process.env.TRAE_ENHANCER_AUTO_CHECKIN !== "0") {
-    const runScheduledCheckin = async () => {
-      if (
-        switchInFlight ||
-        loginStartInFlight ||
-        oauthManager.isActive() ||
-        fakeLogoutManager.isActive() ||
-        insightsRefreshInFlight ||
-        checkinInFlight ||
-        keepaliveInFlight
-      ) {
-        return;
-      }
-      try {
-        const cockpit = await resolveCockpitPolicy();
-        if (cockpit.action === "skip") {
-          console.log("[checkin] skipped because Cockpit Tools is running");
-          return;
-        }
-        const result = await runAccountCheckin(null, {
-          force: false,
-          reason: "scheduled",
-          allowTokenRefresh: cockpit.action !== "no-token-refresh",
-        });
-        console.log(
-          `[checkin] scheduled checked=${result.checkedIn} skipped=${result.skipped} failed=${result.failed}`,
-        );
-        await notifyAccountsUpdated(cdpClient);
-      } catch (error) {
-        console.error(`[checkin] scheduled run failed: ${error.message || error}`);
-      }
-    };
-    autoCheckinStartTimer = setTimeout(runScheduledCheckin, 5000);
-    autoCheckinStartTimer.unref?.();
-    autoCheckinTimer = setInterval(runScheduledCheckin, AUTO_CHECKIN_INTERVAL_MS);
-    autoCheckinTimer.unref?.();
-  }
+  // Assigned before the loop below and long before the first request in practice:
+  // anything arriving in between would still be picked up, because the start-up
+  // schedule reads the configuration as it is at that moment.
+  rescheduleAutoCheckin = scheduleAutoCheckin;
+  await scheduleAutoCheckin({ initialRun: true });
 
   let autoKeepaliveTimer = null;
   let autoKeepaliveStartTimer = null;

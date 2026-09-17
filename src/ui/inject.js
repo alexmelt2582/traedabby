@@ -657,6 +657,12 @@
       border-radius: 10px;
     }
 
+    /* Sits on its own line under the failure message instead of running on. */
+    #${ROOT_ID} .te-empty .te-adopt-retry {
+      display: block;
+      margin: 12px auto 0;
+    }
+
     #${ROOT_ID} .te-footer {
       min-height: 34px;
       display: flex;
@@ -1053,7 +1059,7 @@
         </div>
         <div class="te-feature">
           <span class="te-feature-icon">5</span>
-          <span><span class="te-feature-title">自动签到</span><span class="te-feature-desc">每天自动检查并为全部账号领取签到积分。</span></span>
+          <span><span class="te-feature-title">自动签到</span><span class="te-feature-desc te-feature-checkin">为全部账号自动领取签到积分。</span></span>
         </div>
         <div class="te-feature">
           <span class="te-feature-icon">6</span>
@@ -1124,6 +1130,37 @@
         </div>
         <div class="te-restart-banner te-trae-restart">
           <span>已保存，重启 TRAE 后生效。</span>
+        </div>
+      </div>
+      <div class="te-section">
+        <div class="te-section-title">
+          <span>自动签到</span>
+          <span class="te-badge te-checkin-badge">未读取</span>
+        </div>
+        <div class="te-section-hint">
+          跳过今日已签到的账号，只对未签到的领奖。使用各账号自己的凭据，不会切换你当前登录的账号。
+        </div>
+        <label class="te-field">
+          <span>自动签到</span>
+          <select class="te-select te-checkin-auto">
+            <option value="on">开启</option>
+            <option value="off">关闭</option>
+          </select>
+        </label>
+        <label class="te-field">
+          <span>检查间隔</span>
+          <select class="te-select te-checkin-interval"></select>
+        </label>
+        <label class="te-field">
+          <span>页面加载时补签</span>
+          <select class="te-select te-checkin-clientload">
+            <option value="on">开启</option>
+            <option value="off">关闭</option>
+          </select>
+        </label>
+        <div class="te-status-list te-checkin-status"></div>
+        <div class="te-section-actions">
+          <button class="te-primary te-checkin-save" type="button">保存</button>
         </div>
       </div>
       <div class="te-section">
@@ -1241,6 +1278,9 @@
   // opened. Accounts without a confirmed record show "同步中" instead of the
   // misleading "待签到" during that window.
   let syncingCheckin = false;
+  // Why the automatic adoption of the signed-in account failed, if it did. Kept
+  // here so the empty state can say it instead of looking like "no accounts yet".
+  let adoptionError = null;
 
   function loginSessionSeen(sessionId) {
     if (!sessionId) return false;
@@ -1427,7 +1467,22 @@
     if (!accounts.length) {
       const empty = document.createElement("div");
       empty.className = "te-empty";
-      empty.textContent = "暂无账号备份";
+      if (adoptionError) {
+        // Two different situations, two different messages. Until now both of them
+        // read "暂无账号备份", which is why a failed first run looked like a
+        // feature that had not been built.
+        empty.textContent = `自动纳管当前账号失败：${adoptionError}`;
+        const retry = document.createElement("button");
+        retry.className = "te-secondary te-adopt-retry";
+        retry.type = "button";
+        retry.textContent = "重新尝试";
+        retry.addEventListener("click", () => {
+          retryAutoBackup(retry).catch(() => {});
+        });
+        empty.append(retry);
+      } else {
+        empty.textContent = "暂无账号备份";
+      }
       list.appendChild(empty);
       return;
     }
@@ -1570,15 +1625,28 @@
     }
   }
 
+  /**
+   * Adopts the account that is signed in right now.
+   *
+   * The failure is returned instead of swallowed: "nothing to adopt" and
+   * "adoption failed" used to produce the same empty list, which made a broken
+   * first run indistinguishable from an account that was never added.
+   */
   async function autoBackupCurrent() {
     try {
-      return await api("/api/accounts/backup", {
-        method: "POST",
-        body: "{}",
-      });
-    } catch {
-      return null;
+      const result = await api("/api/accounts/backup", { method: "POST", body: "{}" });
+      return { ok: true, result };
+    } catch (error) {
+      return { ok: false, error: error?.message || String(error) };
     }
+  }
+
+  async function retryAutoBackup(button) {
+    button.disabled = true;
+    button.textContent = "纳管中…";
+    const backup = await autoBackupCurrent();
+    adoptionError = backup.ok ? null : backup.error;
+    await refresh();
   }
 
   function switchTab(name) {
@@ -1695,6 +1763,12 @@
     traeStatus: settingsPane.querySelector(".te-trae-status"),
     traeSave: settingsPane.querySelector(".te-trae-save"),
     traeRestartBanner: settingsPane.querySelector(".te-trae-restart"),
+    checkinBadge: settingsPane.querySelector(".te-checkin-badge"),
+    checkinAuto: settingsPane.querySelector(".te-checkin-auto"),
+    checkinInterval: settingsPane.querySelector(".te-checkin-interval"),
+    checkinClientLoad: settingsPane.querySelector(".te-checkin-clientload"),
+    checkinStatus: settingsPane.querySelector(".te-checkin-status"),
+    checkinSave: settingsPane.querySelector(".te-checkin-save"),
   };
   let settingsModes = [];
   let settingsLoaded = false;
@@ -1842,6 +1916,108 @@
     }
   }
 
+  /**
+   * Enables or disables the two fields the master switch governs.
+   *
+   * Disabled rather than hidden, so the values that come back on re-enabling stay
+   * visible. It covers the automatic runs only: opening the panel and the
+   * 「立即签到」 button are deliberate user actions and stay available either way.
+   */
+  function applyCheckinVisibility(auto) {
+    settingsUi.checkinInterval.disabled = !auto;
+    settingsUi.checkinClientLoad.disabled = !auto;
+  }
+
+  function renderCheckin(checkin) {
+    if (!checkin) return;
+    // The allowed intervals come from the daemon, so the panel cannot drift away
+    // from the values the daemon will actually accept.
+    settingsUi.checkinInterval.textContent = "";
+    for (const minutes of checkin.options ?? []) {
+      const option = document.createElement("option");
+      option.value = String(minutes);
+      option.textContent = `每 ${minutes} 分钟`;
+      settingsUi.checkinInterval.append(option);
+    }
+    settingsUi.checkinInterval.value = String(checkin.intervalMinutes);
+    settingsUi.checkinAuto.value = checkin.auto ? "on" : "off";
+    settingsUi.checkinClientLoad.value = checkin.onClientLoad ? "on" : "off";
+    applyCheckinVisibility(checkin.auto);
+
+    settingsUi.checkinBadge.className = `te-badge te-checkin-badge${checkin.auto ? " ok" : ""}`;
+    settingsUi.checkinBadge.textContent = checkin.auto ? "已开启" : "已关闭";
+
+    settingsUi.checkinStatus.textContent = "";
+    if (checkin.auto) {
+      appendStatusLine(settingsUi.checkinStatus, "检查间隔", `每 ${checkin.intervalMinutes} 分钟`);
+      appendStatusLine(
+        settingsUi.checkinStatus,
+        "页面加载",
+        checkin.onClientLoad ? "TRAE 重启后立即补签" : "不补签，等下一次检查",
+      );
+    } else {
+      appendStatusLine(
+        settingsUi.checkinStatus,
+        "说明",
+        "已关闭自动签到。打开面板仍会核对今日状态，「立即签到」按钮照常可用。",
+      );
+    }
+  }
+
+  async function saveCheckinConfig() {
+    const body = {
+      auto: settingsUi.checkinAuto.value === "on",
+      intervalMinutes: Number(settingsUi.checkinInterval.value),
+      onClientLoad: settingsUi.checkinClientLoad.value === "on",
+    };
+    settingsUi.checkinSave.disabled = true;
+    try {
+      const data = await api("/api/settings/checkin", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      renderCheckin(data.checkin);
+      applyAboutCheckinText(data.checkin);
+      // No restart banner here, unlike the proxy: the daemon rebuilds its schedule
+      // in place, so "已保存" and "已生效" are the same moment.
+      showToast("已保存，立即生效");
+    } catch (error) {
+      showToast(error.message || String(error), true);
+    } finally {
+      settingsUi.checkinSave.disabled = false;
+    }
+  }
+
+  /**
+   * Keeps the feature list honest.
+   *
+   * The entry used to read "每天自动检查", which stops being true the moment the
+   * switch is turned off or the interval changes.
+   */
+  function applyAboutCheckinText(checkin) {
+    const target = aboutPane.querySelector(".te-feature-checkin");
+    if (!target || !checkin) return;
+    if (!checkin.auto) {
+      target.textContent = "已关闭（打开面板和「立即签到」仍可用）。";
+      return;
+    }
+    const every = `每 ${checkin.intervalMinutes} 分钟检查`;
+    target.textContent = checkin.onClientLoad ? `${every}，TRAE 重启后立即补签。` : `${every}。`;
+  }
+
+  /**
+   * Read once when the panel opens, so the feature list matches the saved settings
+   * even when the settings tab was never visited. Not a poll: it runs on open.
+   */
+  async function refreshAboutCheckinText() {
+    try {
+      const data = await api("/api/settings");
+      applyAboutCheckinText(data.checkin);
+    } catch {
+      // The generic wording stays; it is not worth an error in the panel footer.
+    }
+  }
+
   async function loadSettings({ silent = false } = {}) {
     if (!silent) {
       settingsUi.badge.className = "te-badge te-proxy-badge";
@@ -1874,6 +2050,7 @@
       applyProxyModeVisibility(settingsUi.mode.value);
       renderProxyState(network);
       renderTraeUpdate(data.traeUpdate);
+      renderCheckin(data.checkin);
       lastSavedForm = currentProxyForm();
       settingsLoaded = true;
     } catch (error) {
@@ -2534,6 +2711,10 @@
 
   function openPanel() {
     panel.classList.add("open");
+    // The daemon adopts the signed-in account on its own now, so this is only a
+    // fallback for the moment the panel is opened. Kept because it is the one path
+    // that works when the daemon has been running since before TRAE was signed in.
+    void refreshAboutCheckinText();
     // Paint "同步中" first: until the daemon answers, an account with no local
     // check-in record may well already be checked in on the server.
     syncingCheckin = true;
@@ -2541,7 +2722,14 @@
       .then(async (data) => {
         if (data?.accounts && !data.currentAccountId) {
           const backup = await autoBackupCurrent();
-          if (backup) data = await refresh();
+          if (backup.ok) {
+            adoptionError = null;
+            data = await refresh();
+          } else {
+            adoptionError = backup.error;
+            // Repaint so the reason replaces the bare empty state right away.
+            renderAccounts(data.accounts, data.currentAccountId);
+          }
         }
         const result = await reconcileWithDaemon();
         // The daemon orchestrates check-in and credits whenever it is free. When it
@@ -2603,6 +2791,14 @@
   });
   settingsUi.traeSave.addEventListener("click", () => {
     saveTraeUpdate().catch(() => {});
+  });
+  settingsUi.checkinSave.addEventListener("click", () => {
+    saveCheckinConfig().catch(() => {});
+  });
+  // The master switch takes effect on the form immediately, so the two governed
+  // fields never look editable while they are ignored.
+  settingsUi.checkinAuto.addEventListener("change", () => {
+    applyCheckinVisibility(settingsUi.checkinAuto.value === "on");
   });
   for (const button of settingsUi.restartButtons) {
     button.addEventListener("click", () => {

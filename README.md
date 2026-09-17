@@ -21,9 +21,11 @@ The account suite also supports:
   state, reopens TRAE at the login page, and saves the new account automatically.
 - encrypted account export and import using scrypt plus AES-256-GCM, with deduplication
   by account identity and no automatic account switching during import.
-- automatic daily check-in for every saved account. Check-in uses each account's own
-  stable user id as its request device id, so one account does not consume another
-  account's daily check-in slot.
+- automatic check-in for every saved account, on an interval you choose (15, 30, 60 or
+  120 minutes). Check-in uses each account's own stable user id as its request device
+  id, so one account does not consume another account's daily check-in slot.
+- the account signed in when TRAE first connects is adopted automatically, so a fresh
+  install never opens on an empty list waiting for you to add one by hand.
 - automatic account keep-alive. Inactive accounts refresh their login credentials and
   usage every six hours; the active account is synchronized from the running TRAE
   session instead of rotating its refresh token. Keep-alive is skipped while Cockpit
@@ -39,7 +41,20 @@ written to disk or included in the export.
 
 ## Getting started
 
-Double-click `scripts\trae-enhancer.cmd`, or run the service CLI directly:
+In a packaged build, use the shortcut the installer created. It points at
+`scripts\launch-hidden.vbs`, which starts the whole chain with no console window:
+the bundled executable is a console-subsystem program, so launching it directly
+always opens one. Only the launch entries are hidden. A command such as `stop` keeps
+its console on purpose, because you asked for something to happen and should see it
+reported.
+
+The launcher also reports a missing executable in a dialog box, with the path it
+looked in. A shortcut that silently does nothing is indistinguishable from one that
+never ran, and the usual cause — antivirus quarantining the executable, or a partial
+extraction — is then impossible to diagnose. The logon entry deliberately stays
+silent instead, since a modal box at every logon would be worse than the silence.
+
+To run it by hand, or to read the output, use the service CLI:
 
 ```powershell
 node scripts\service.js start      # launch TRAE with CDP, the daemon, and the panel
@@ -56,8 +71,8 @@ node scripts\service.js stop       # stop the supervisor and the daemon
 | `restart` | `stop` followed by `daemon`. |
 | `status` | Prints daemon, CDP, supervisor, autostart, and endpoint state. |
 | `locate` | Shows where TRAE was found and every location that was probed. |
-| `configure` | Saves the TRAE path, or toggles environment proxy support. |
-| `net` | Probes the required hosts directly and through the environment proxy. |
+| `configure` | Saves the TRAE path, or sets the proxy mode and address. |
+| `net` | Probes the required hosts directly and through the configured proxy. |
 | `install` | Registers the logon autostart entry (background service only). |
 | `uninstall` | Removes the logon autostart entry. |
 | `tray` | Starts the tray icon host. |
@@ -67,6 +82,71 @@ node scripts\service.js stop       # stop the supervisor and the daemon
 `stop` never terminates a process group. It reads the daemon pid from
 `/api/health` and the supervisor pid from `data/watchdog.pid`, confirms each pid
 is one of this project's own process images, and then stops that single pid.
+
+## Settings
+
+The injected panel has a **设置** tab covering the two options that make the
+assistant behave the same way on an intranet machine as TRAE itself does. Both are
+also reachable from the CLI.
+
+### Network proxy
+
+TRAE renders with Chromium and therefore follows the Windows system proxy, while the
+daemon's `fetch` reads neither the registry nor `HTTP_PROXY` unless it is told to.
+On a machine where only the system proxy is configured, that difference shows up as
+"TRAE works, the assistant cannot reach `api.trae.cn`".
+
+The panel offers three choices. A fourth mode, `env` (read `HTTP_PROXY` from the
+environment), still exists in `config.json` because v1.0.0 configurations migrate
+into it, but it is not offered in the UI and is only shown while it *is* the current
+value.
+
+| Mode | What it does |
+| --- | --- |
+| `system` (default) | Reads `HKCU\...\Internet Settings` and follows it. With no system proxy configured this resolves to nothing, so it behaves exactly like `off`. |
+| `manual` | One proxy address you supply, for machines that only publish a PAC script or need a fixed proxy. |
+| `off` | Never use a proxy. |
+
+```powershell
+TraeEnhancer.exe configure --proxy-mode manual --proxy-url 127.0.0.1:7890
+TraeEnhancer.exe configure --proxy-mode system
+TraeEnhancer.exe net
+```
+
+A proxy address is stored without credentials: `data/config.json` is plain JSON, so a
+password written there would be an unencrypted secret. A proxy that needs
+authentication has to be set as the Windows system proxy instead, where the operating
+system holds the credentials. A URL that embeds a username or password is refused.
+
+**HTTP proxies only.** Node's environment-proxy support accepts `http:` and `https:`
+and nothing else. A SOCKS address is not merely ignored: it makes the process throw
+before it can start, so every path that produces proxy variables — the config layer,
+the manual mode, and the environment mode — rejects it. A `socks5://` value found in
+`HTTP_PROXY` is dropped and reported rather than passed on.
+
+Only a PAC script and no proxy server is reported as such rather than guessed at:
+Node cannot evaluate a PAC file, and the panel points at the manual mode instead.
+
+**Saving is not applying.** Node reads its proxy configuration once, when it starts,
+so both the panel and the CLI report that a restart is required and the panel offers
+the restart. The restart is performed by a detached helper that waits for the old
+process to exit, so the two never contend for the listening port.
+
+### TRAE automatic updates
+
+TRAE checks for updates every 60 minutes by default and requires a restart when one
+is found, which interrupts whatever the assistant is doing. The settings tab writes
+`update.mode: "manual"` into `%APPDATA%\TRAE SOLO CN\User\settings.json`, which stops
+the automatic checks entirely; manual checks from TRAE's own menu still work.
+
+- Only that single entry is touched. The file is JSONC and is edited as text, so
+  comments and formatting survive, and every other setting is left byte-identical.
+- The previous value is remembered, and "允许自动更新" restores it.
+- The file is copied to `settings.json.trae-enhancer.bak` before the first change, and
+  a failed write restores it.
+- The change takes effect when TRAE restarts.
+
+TRAE's separately pushed `forceUpdate` configuration is not affected by this setting.
 
 ## Background service and autostart
 
@@ -160,22 +240,28 @@ TraeEnhancer.exe net
 ```
 
 It resolves and contacts every host the project needs, first directly and then
-through the environment proxy, and prints the conclusion. A failing step is
+through the configured proxy, and prints the conclusion. A failing step is
 reported with its full `cause` chain (`ECONNREFUSED`, `ENOTFOUND`, a certificate
 error) instead of the bare `fetch failed` that Node produces on its own.
+
+The panel's **设置** tab runs the same comparison for a candidate configuration
+before you save it, so "should this machine use a proxy" can be answered on the
+machine itself rather than inferred.
 
 If the conclusion is that the proxy is required:
 
 ```powershell
-TraeEnhancer.exe configure --use-env-proxy on
+TraeEnhancer.exe configure --proxy-mode system      # follow the Windows system proxy
+TraeEnhancer.exe configure --proxy-mode manual --proxy-url 127.0.0.1:7890
 TraeEnhancer.exe restart
 ```
 
 Two details matter here:
 
 - Node's `fetch` **ignores** `HTTP_PROXY` / `HTTPS_PROXY` unless the process is
-  started with environment proxy support. The flag is only read at start-up, so it
-  is injected into the daemon's spawn environment rather than set at runtime.
+  started with environment proxy support. That is read at start-up only, so it is
+  injected into the daemon's spawn environment rather than set at runtime — and a
+  saved change needs the restart above.
 - `NO_PROXY` always keeps loopback out of the proxy. The service, the supervisor,
   and the CDP endpoint are all local.
 
@@ -221,6 +307,7 @@ installation on the target machine:
 ```
 dist\portable\
   TraeEnhancer.exe
+  scripts\launch-hidden.vbs   the shortcut target: starts everything with no console
   scripts\trae-enhancer.cmd
   scripts\tray.ps1
   README.md
@@ -244,13 +331,32 @@ Two constraints shape the build and must not be broken:
 
 ## Automatic jobs
 
-- Check-in runs a sweep five seconds after daemon startup and every 30 minutes.
-  Each account is claimed at most once per Asia/Shanghai calendar day.
+- Check-in runs a sweep five seconds after daemon startup, then every 15, 30, 60 or 120
+  minutes — 30 by default, changeable in 设置 → 自动签到. Each account is claimed at
+  most once per Asia/Shanghai calendar day.
+- When TRAE connects, the daemon runs one check-in as well, so restarting TRAE
+  mid-session is covered immediately instead of waiting for the next interval.
+- Turning automatic check-in off stops those two runs only. Opening the panel still
+  reconciles today's state, and the 「立即签到」 button still works: those are actions you
+  take, not background runs.
 - Keep-alive sweeps every 30 minutes. Inactive accounts refresh credentials and
   usage at most once every six hours; failures retry after 30 minutes.
 - The active account is synchronized from the running TRAE storage. Its refresh
   token is not rotated from the stored backup.
+- Rotating a refresh token can invalidate whoever still holds the old one, so a
+  rotation only happens once TRAE is known *not* to be signed in as a managed account.
+  If the live account cannot be read at all, the entire sweep is skipped and the
+  reason is logged, rather than rotating blind. TRAE holding an account outside the
+  saved list is fine and blocks nothing.
 - Automatic check-in and keep-alive are skipped while Cockpit Tools is running.
+- The Cockpit Tools test tries `tasklist` first and PowerShell second. If neither can
+  answer, check-in still runs but credential rotation is refused and keep-alive is
+  skipped, and the reason is written to `logs\daemon.log` — a probe failure must never
+  silently cancel a sweep.
+- Opening the panel reconciles check-in state with the server and refreshes credits.
+  That call is idempotent: an account already checked in is recorded without claiming
+  a second reward. The daemon pushes an event over CDP after every state change, so an
+  open panel updates itself; there is no polling loop.
 
 Set `TRAE_ENHANCER_AUTO_CHECKIN=0` or `TRAE_ENHANCER_AUTO_KEEPALIVE=0` to disable
 the corresponding scheduler. Keep-alive timing can be overridden with

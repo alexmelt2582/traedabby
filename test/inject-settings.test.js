@@ -81,3 +81,63 @@ test("the pane is registered in the content area", () => {
     "the settings pane is not appended to the content area",
   );
 });
+
+/**
+ * Returns the body of a top-level function in the injected source.
+ *
+ * The two-space closing brace is what ends a function declared inside `setup()`;
+ * the nested blocks inside it are indented further.
+ */
+function functionBody(signature) {
+  const match = source.match(new RegExp(`${signature}\\s*\\{([\\s\\S]*?)\\n  \\}`));
+  assert.ok(match, `${signature} was not found`);
+  return match[1];
+}
+
+test("the check-in section takes its interval list from the daemon", () => {
+  const markup = paneTemplate("settingsPane");
+  assert.ok(markup.includes("自动签到"), "the check-in section is missing");
+  // Shipped empty on purpose: the allowed values belong to the daemon, and a second
+  // hard-coded list here is exactly how the two would drift apart.
+  assert.ok(
+    markup.includes('<select class="te-select te-checkin-interval"></select>'),
+    "the interval select must not hard-code its options",
+  );
+  assert.ok(functionBody("function renderCheckin\\(checkin\\)").includes("checkin.options"));
+});
+
+test("turning automatic check-in off disables its fields instead of hiding them", () => {
+  const body = functionBody("function applyCheckinVisibility\\(auto\\)");
+  assert.ok(body.includes("settingsUi.checkinInterval.disabled = !auto"));
+  assert.ok(body.includes("settingsUi.checkinClientLoad.disabled = !auto"));
+  // Disabled, not hidden: the saved interval has to stay readable while it is off.
+  assert.ok(!body.includes("hidden"), "the fields must not be hidden while disabled");
+});
+
+test("saving the check-in settings applies without a restart banner", () => {
+  const body = functionBody("async function saveCheckinConfig\\(\\)");
+  assert.ok(body.includes('"/api/settings/checkin"'));
+  assert.ok(
+    !body.includes("RestartBanner"),
+    "the daemon rebuilds its schedule in place, so a restart notice would be wrong",
+  );
+});
+
+test("the about pane's check-in line follows the saved settings", () => {
+  const markup = paneTemplate("aboutPane");
+  assert.ok(markup.includes("te-feature-checkin"), "the about entry has no hook to update");
+  assert.ok(
+    !markup.includes("每天自动检查"),
+    "the static wording must not promise a schedule the settings can change",
+  );
+  const body = functionBody("function applyAboutCheckinText\\(checkin\\)");
+  assert.ok(body.includes("已关闭"), "the disabled wording is missing");
+  assert.ok(body.includes("分钟检查"), "the enabled wording must name the real interval");
+});
+
+test("the empty state separates a failed adoption from having no accounts", () => {
+  const body = functionBody("function renderAccounts\\(accounts, currentAccountId\\)");
+  assert.ok(body.includes("暂无账号备份"));
+  assert.ok(body.includes("adoptionError"), "the failure reason is never rendered");
+  assert.ok(body.includes("te-adopt-retry"), "there is no way to retry after a failure");
+});
