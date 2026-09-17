@@ -4,7 +4,9 @@
  *
  * Commands:
  *   start      Launch the full chain (TRAE with CDP + daemon + panel injection)
- *   daemon     Ensure the background service is up (daemon + watchdog)
+ *   daemon     Ensure the background service is up (daemon + watchdog);
+ *              `--wait-pid <pid>` first waits for that pid to exit, which is how
+ *              the panel restarts the daemon after a settings change
  *   stop       Stop the watchdog and the daemon by their exact pids
  *   restart    stop, then start the background service
  *   status     Print what is currently running
@@ -57,6 +59,8 @@ import {
 import {
   normalizeTraeExe,
   normalizeUseEnvProxy,
+  normalizeProxyMode,
+  normalizeProxyUrl,
   configPath,
   loadAppConfig,
   saveAppConfig,
@@ -70,7 +74,6 @@ import {
 } from "../src/lib/trae-locate.js";
 import {
   STATIC_HOSTS,
-  anyProxyConfigured,
   describeErrorChain,
   formatProbeLine,
   probeHosts,
@@ -79,6 +82,15 @@ import {
   proxyEnvEnabled,
   proxyEnvReport,
 } from "../src/lib/net-diagnostics.js";
+import {
+  PROXY_MODE_LABELS,
+  buildProxyVars,
+  describeProxyState,
+  describeSystemProxy,
+  readWindowsSystemProxy,
+  redactProxyUrl,
+  resolveProxyVars,
+} from "../src/lib/system-proxy.js";
 import {
   flagValue,
   parseServiceArgs,
@@ -294,7 +306,7 @@ async function commandStart(args = []) {
  * race a daemon that is already booting, which makes it the wrong tool for a
  * user asking for the service to be started now.
  */
-function spawnDaemonNow(useEnvProxy = false) {
+function spawnDaemonNow(proxyVars = null) {
   const launch = daemonSpec();
   const child = spawn(launch.command, launch.args, {
     cwd: launch.cwd,
@@ -302,7 +314,7 @@ function spawnDaemonNow(useEnvProxy = false) {
     stdio: "ignore",
     windowsHide: true,
     env: {
-      ...proxyChildEnv({ useEnvProxy }),
+      ...proxyChildEnv({ proxyVars }),
       TRAE_ENHANCER_UI_PORT: String(UI_PORT),
     },
   });
@@ -310,13 +322,46 @@ function spawnDaemonNow(useEnvProxy = false) {
   return child.pid ?? null;
 }
 
-async function commandDaemon() {
+/**
+ * Waits for a pid to disappear, so a replacement daemon is not started while the
+ * old one still holds the listening port.
+ *
+ * Used by the panel's "保存并重启": the daemon spawns this helper and then exits
+ * itself, so the helper has to outlive its own parent. Polling `isProcessAlive`
+ * avoids every privileged call (`tasklist`, PowerShell), which matters because
+ * those are exactly what security policy blocks on managed machines.
+ */
+async function waitForPidExit(pid, { timeoutMs = 20000 } = {}) {
+  const normalized = normalizePid(pid);
+  if (normalized === null) {
+    log(`--wait-pid: "${pid}" is not a valid pid, continuing immediately`);
+    return true;
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && isProcessAlive(normalized)) {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  if (isProcessAlive(normalized)) {
+    log(`--wait-pid: pid ${normalized} is still alive after ${timeoutMs}ms`);
+    return false;
+  }
+  return true;
+}
+
+async function commandDaemon(args = []) {
+  const waitPid = flagValue(args, "--wait-pid");
+  if (waitPid !== null) {
+    const exited = await waitForPidExit(waitPid);
+    if (!exited) log("旧守护进程仍未退出；如果它仍在响应，就继续沿用它。");
+  }
+
   const config = await loadAppConfig(DATA_DIR);
+  const proxy = await resolveProxyVars(config.proxy);
   let health = await readHealth();
   if (health) {
     log(`daemon already running (pid ${health.pid})`);
   } else {
-    const pid = spawnDaemonNow(config.useEnvProxy);
+    const pid = spawnDaemonNow(proxy.vars);
     log(`daemon was not running; started pid ${pid ?? "unknown"}`);
     health = await waitForHealth(STARTUP_WAIT_MS);
   }
@@ -595,10 +640,44 @@ function parseHostArguments(args) {
   return hosts;
 }
 
-function formatNetworkReport({ hosts, direct, proxied, config }) {
+function formatProxySection({ proxy, resolved, systemRead }) {
+  const lines = [];
+  lines.push(`代理模式        : ${PROXY_MODE_LABELS[proxy.mode] ?? proxy.mode}`);
+  if (proxy.mode === "manual") {
+    lines.push(`配置的代理地址  : ${redactProxyUrl(proxy.url ?? "") || "(未填写)"}`);
+  }
+  if (proxy.noProxy) {
+    lines.push(`附加 NO_PROXY   : ${proxy.noProxy}`);
+  }
+  lines.push(
+    resolved.vars
+      ? `本次解析结果    : 生效（来源: ${PROXY_MODE_LABELS[resolved.source] ?? resolved.source}；已设置 ${Object.keys(resolved.vars).sort().join(", ")}）`
+      : "本次解析结果    : 未生效",
+  );
+  for (const note of resolved.notes ?? []) lines.push(`                  ${note}`);
+
+  if (proxy.mode === "system") {
+    if (!systemRead || systemRead.available === false) {
+      lines.push("系统代理        : 读取失败");
+      if (systemRead?.error) lines.push(`                  ${systemRead.error}`);
+    } else {
+      const view = describeSystemProxy(systemRead.snapshot);
+      lines.push(`系统代理已启用  : ${view.enabled ? "是" : "否"}`);
+      if (view.hasServer) lines.push(`系统代理地址    : ${view.server}`);
+      for (const [scheme, value] of Object.entries(view.byScheme)) {
+        lines.push(`  按协议 ${scheme.padEnd(6)}: ${value}`);
+      }
+      if (view.override) lines.push(`系统代理例外    : ${view.override}`);
+      if (view.hasAutoConfigUrl) lines.push(`自动配置脚本    : ${view.autoConfigUrl}`);
+    }
+  }
+  return lines;
+}
+
+function formatNetworkReport({ hosts, direct, proxied, proxy, resolved, systemRead }) {
   const lines = [];
   lines.push(`配置文件        : ${configPath(DATA_DIR)}`);
-  lines.push(`环境代理开关    : ${config.useEnvProxy ? "已开启" : "未开启"}`);
+  lines.push(...formatProxySection({ proxy, resolved, systemRead }));
   lines.push(`本进程代理生效  : ${proxyEnvEnabled() ? "是" : "否"}`);
   lines.push("");
   lines.push("代理环境变量（只报是否设置，不显示值）:");
@@ -610,18 +689,18 @@ function formatNetworkReport({ hosts, direct, proxied, config }) {
   for (const result of direct) lines.push(`  ${formatProbeLine(result)}`);
   if (proxied) {
     lines.push("");
-    lines.push("走环境代理探测:");
+    lines.push("走配置代理探测:");
     for (const result of proxied) lines.push(`  ${formatProbeLine(result)}`);
-  } else if (!anyProxyConfigured()) {
+  } else if (!resolved.vars) {
     lines.push("");
-    lines.push("未检测到代理环境变量，跳过代理模式探测。");
+    lines.push("当前配置没有解析出可用代理，跳过代理模式探测。");
   }
   lines.push("");
   const directOk = direct.every(probeSucceeded);
   if (directOk) {
     lines.push("结论: 直连可达，网络不是问题。");
-  } else if (proxied?.every(probeSucceeded)) {
-    lines.push("结论: 直连失败但走代理可达 → 请执行 configure --use-env-proxy on");
+  } else if (proxied?.length && proxied.every(probeSucceeded)) {
+    lines.push("结论: 直连失败但走代理可达 → 请执行 configure --proxy-mode system");
   } else {
     lines.push("结论: 直连与代理都失败，请把上面的错误码发给排查方。");
   }
@@ -639,16 +718,18 @@ async function commandNet(args = []) {
   }
 
   const config = await loadAppConfig(DATA_DIR);
+  const systemRead = config.proxy.mode === "system" ? await readWindowsSystemProxy() : null;
+  const resolved = buildProxyVars(config.proxy, systemRead);
   const direct = await probeHosts(hosts);
   let proxied = null;
-  if (anyProxyConfigured()) proxied = await probeThroughProxy(hosts);
+  if (resolved.vars) proxied = await probeThroughProxy(hosts, resolved.vars);
 
   if (args.includes("--json")) {
     log(
       JSON.stringify(
         {
           hosts,
-          configUseEnvProxy: config.useEnvProxy,
+          proxy: describeProxyState(config.proxy, resolved, systemRead),
           proxyEnvEnabled: proxyEnvEnabled(),
           proxyEnv: proxyEnvReport(),
           direct,
@@ -661,19 +742,19 @@ async function commandNet(args = []) {
     return;
   }
 
-  log(formatNetworkReport({ hosts, direct, proxied, config }));
+  log(formatNetworkReport({ hosts, direct, proxied, proxy: config.proxy, resolved, systemRead }));
 }
 
 /**
- * Spawns the same command in a child process with environment proxy support on,
- * because that flag is only honoured at Node start-up.
+ * Spawns the same command in a child process with the resolved proxy variables,
+ * because `NODE_USE_ENV_PROXY` is only honoured at Node start-up.
  */
-async function probeThroughProxy(hosts) {
+async function probeThroughProxy(hosts, proxyVars) {
   const launch = serviceSpec("net", [NET_PROBE_FLAG, ...hosts.flatMap((host) => ["--host", host])]);
   try {
     const { stdout } = await execFileAsync(launch.command, launch.args, {
       cwd: launch.cwd,
-      env: proxyChildEnv({ useEnvProxy: true }),
+      env: proxyChildEnv({ proxyVars }),
       encoding: "utf8",
       timeout: 60000,
       windowsHide: true,
@@ -687,17 +768,31 @@ async function probeThroughProxy(hosts) {
 }
 
 async function commandConfigure(args = []) {
-  const proxyIndex = args.indexOf("--use-env-proxy");
-  if (proxyIndex >= 0) {
-    const raw = args[proxyIndex + 1];
-    if (!raw) {
-      log("用法: configure --use-env-proxy on|off");
-      process.exitCode = 2;
-      return;
+  // `flagValue` answers null when the flag is absent, so the comparisons below
+  // must be against null: testing against undefined would treat a missing flag as
+  // a supplied one and reset the proxy mode on every unrelated `configure` call.
+  const proxyMode = flagValue(args, "--proxy-mode");
+  const proxyUrl = flagValue(args, "--proxy-url");
+  const legacyProxyIndex = args.indexOf("--use-env-proxy");
+
+  if (proxyMode !== null || proxyUrl !== null || legacyProxyIndex >= 0) {
+    const current = await loadAppConfig(DATA_DIR);
+    let mode = current.proxy.mode;
+    if (proxyMode !== null) {
+      mode = normalizeProxyMode(proxyMode);
+    } else if (legacyProxyIndex >= 0) {
+      // v1.0.0's boolean flag still works: on -> env, off -> off.
+      mode = normalizeUseEnvProxy(args[legacyProxyIndex + 1]) ? "env" : "off";
     }
-    const enabled = normalizeUseEnvProxy(raw);
-    await saveAppConfig(DATA_DIR, { useEnvProxy: enabled });
-    log(`已${enabled ? "开启" : "关闭"}环境代理支持（${configPath(DATA_DIR)}）`);
+    const url = proxyUrl !== null ? normalizeProxyUrl(proxyUrl) : current.proxy.url;
+    const next = await saveAppConfig(DATA_DIR, {
+      proxy: { mode, url, noProxy: current.proxy.noProxy },
+    });
+    log(`代理模式已设为「${PROXY_MODE_LABELS[next.proxy.mode] ?? next.proxy.mode}」（${configPath(DATA_DIR)}）`);
+    if (next.proxy.url) log(`代理地址: ${redactProxyUrl(next.proxy.url)}`);
+    if (next.proxy.mode === "manual" && !next.proxy.url) {
+      log("注意: 手动模式还没有填写代理地址，请执行 configure --proxy-url host:port");
+    }
     log("正在运行的 daemon 需要 restart 才会生效。");
     return;
   }
@@ -712,6 +807,8 @@ async function commandConfigure(args = []) {
   if (!raw) {
     log('用法: configure --trae-exe "D:\\路径\\TRAE SOLO CN.exe"');
     log("      configure --clear");
+    log("      configure --proxy-mode system|manual|env|off");
+    log("      configure --proxy-url 127.0.0.1:7890");
     process.exitCode = 2;
     return;
   }

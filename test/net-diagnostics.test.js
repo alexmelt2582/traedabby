@@ -6,10 +6,12 @@ import {
   describeErrorChain,
   formatProbeLine,
   probeSucceeded,
+  proxyChildEnv,
   proxyEnvEnabled,
   proxyEnvReport,
   redactQueryValues,
   redactUrl,
+  stripProxyEnv,
 } from "../src/lib/net-diagnostics.js";
 
 function withCause(message, cause, extra = {}) {
@@ -110,6 +112,49 @@ test("a NO_PROXY entry alone is not treated as a configured proxy", () => {
   assert.equal(anyProxyConfigured({ NO_PROXY: "127.0.0.1" }), false);
   assert.equal(anyProxyConfigured({ HTTPS_PROXY: "http://p:1", NO_PROXY: "127.0.0.1" }), true);
   assert.equal(anyProxyConfigured({}), false);
+});
+
+test("proxy variables reach a child environment and loopback never does", () => {
+  const env = proxyChildEnv({ proxyVars: { HTTP_PROXY: "http://p:8080" } });
+  assert.equal(env.NODE_USE_ENV_PROXY, "1");
+  assert.equal(env.HTTP_PROXY, "http://p:8080");
+  for (const entry of ["127.0.0.1", "localhost", "::1"]) {
+    assert.equal(env.NO_PROXY.split(",").includes(entry), true);
+  }
+});
+
+test("a child without a resolved proxy keeps the environment untouched", () => {
+  const source = { NODE_USE_ENV_PROXY: "1", HTTPS_PROXY: "http://old:1" };
+  const env = proxyChildEnv({ proxyVars: null, env: source });
+  // Passing the environment through is safe: Node only reads these variables when
+  // NODE_USE_ENV_PROXY is present in the child's own start-up environment.
+  assert.equal(env.HTTPS_PROXY, "http://old:1");
+  assert.equal(source.HTTPS_PROXY, "http://old:1");
+});
+
+test("stripping removes every proxy variable, including the node switch", () => {
+  const env = stripProxyEnv({
+    PATH: "/usr/bin",
+    NODE_USE_ENV_PROXY: "1",
+    HTTP_PROXY: "http://p:1",
+    HTTPS_PROXY: "http://p:1",
+    ALL_PROXY: "socks://p:1",
+    NO_PROXY: "127.0.0.1",
+    http_proxy: "http://p:1",
+    no_proxy: "127.0.0.1",
+  });
+  assert.equal(env.PATH, "/usr/bin");
+  for (const name of Object.keys(env)) {
+    assert.equal(name.toLowerCase().includes("proxy"), false, `${name} should be gone`);
+  }
+  assert.equal(env.NODE_USE_ENV_PROXY, undefined);
+});
+
+test("a stripped environment is a safe base for a fresh proxy resolution", () => {
+  const stripped = stripProxyEnv({ NODE_USE_ENV_PROXY: "1", HTTPS_PROXY: "http://old:1" });
+  const env = proxyChildEnv({ proxyVars: { HTTPS_PROXY: "http://new:1" }, env: stripped });
+  assert.equal(env.HTTPS_PROXY, "http://new:1");
+  assert.equal(env.NODE_USE_ENV_PROXY, "1");
 });
 
 test("probe results always produce a readable line", () => {

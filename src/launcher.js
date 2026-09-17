@@ -27,6 +27,7 @@ import {
 import { readTextFile } from "./lib/json-file.js";
 import { loadAppConfig } from "./lib/app-config.js";
 import { proxyChildEnv } from "./lib/net-diagnostics.js";
+import { resolveProxyVars } from "./lib/system-proxy.js";
 import { setTimeout as delay } from "node:timers/promises";
 
 function argumentValue(name) {
@@ -70,13 +71,14 @@ async function startDaemon() {
 
   const launch = daemonSpec();
   const config = await loadAppConfig(dataDir);
+  const proxy = await resolveProxyVars(config.proxy);
   const child = spawn(launch.command, launch.args, {
     cwd: launch.cwd,
     detached: true,
     stdio: "ignore",
     windowsHide: true,
     env: {
-      ...proxyChildEnv({ useEnvProxy: config.useEnvProxy }),
+      ...proxyChildEnv({ proxyVars: proxy.vars }),
       TRAE_ENHANCER_CDP_PORT: String(cdpPort),
       TRAE_ENHANCER_UI_PORT: String(uiPort),
       TRAE_ENHANCER_DATA_DIR: dataDir,

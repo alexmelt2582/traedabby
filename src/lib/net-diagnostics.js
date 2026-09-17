@@ -171,15 +171,47 @@ export function ensureLocalNoProxy(existing) {
 /**
  * Environment for a child process that talks to the network.
  *
+ * `proxyVars` is the result of `system-proxy.js`'s `resolveProxyVars`, so this
+ * function stays pure and the mode logic lives in one place.
+ *
  * `NODE_USE_ENV_PROXY` is only read when Node starts, so it cannot be enabled by
  * mutating `process.env` at runtime: it has to be present in the spawn
- * environment of every process that performs fetches.
+ * environment of every process that performs fetches. That is why every spawner
+ * of the daemon resolves the proxy first.
+ *
+ * A null `proxyVars` means "nothing resolved", and the environment is passed
+ * through unchanged. That is safe because `NODE_USE_ENV_PROXY` is then absent
+ * too, so Node ignores whatever proxy variables the ambient environment holds.
  */
-export function proxyChildEnv({ useEnvProxy = false, env = process.env } = {}) {
+export function proxyChildEnv({ proxyVars = null, env = process.env } = {}) {
   const next = { ...env };
-  if (!useEnvProxy) return next;
+  if (!proxyVars) return next;
   next.NODE_USE_ENV_PROXY = "1";
-  next.NO_PROXY = ensureLocalNoProxy(env.NO_PROXY ?? env.no_proxy);
+  for (const [name, value] of Object.entries(proxyVars)) {
+    if (name.toLowerCase() === "no_proxy") continue;
+    next[name] = value;
+  }
+  next.NO_PROXY = ensureLocalNoProxy(proxyVars.NO_PROXY ?? env.NO_PROXY ?? env.no_proxy);
+  // A stale lowercase variable from the ambient environment would otherwise be
+  // picked up by some clients and bypass the configured proxy.
+  for (const stale of ["http_proxy", "https_proxy"]) delete next[stale];
+  return next;
+}
+
+/**
+ * Environment with every proxy variable removed, including `NODE_USE_ENV_PROXY`.
+ *
+ * Used when a child must start a *fresh* proxy resolution rather than inherit the
+ * parent's. Restarting the daemon is the case that matters: the process spawning
+ * the helper was itself started with `NODE_USE_ENV_PROXY=1` and the old proxy
+ * variables, so passing that environment on would make a change to "no proxy"
+ * silently keep using the previous proxy. It is also what makes a direct network
+ * probe genuinely direct.
+ */
+export function stripProxyEnv(env = process.env) {
+  const next = { ...env };
+  delete next.NODE_USE_ENV_PROXY;
+  for (const name of PROXY_NAMES) delete next[name];
   return next;
 }
 
