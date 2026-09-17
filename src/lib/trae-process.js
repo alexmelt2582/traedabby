@@ -101,7 +101,73 @@ export async function findTraeProcessIds(exePath) {
   return (Array.isArray(parsed) ? parsed : [parsed]).map(Number).filter(Number.isInteger);
 }
 
-export async function isCockpitRunning() {
+/**
+ * Image (executable) names that identify Cockpit Tools, without the `.exe`
+ * suffix and lower-cased for comparison.
+ */
+export const COCKPIT_IMAGE_NAMES = [
+  "cockpit tools",
+  "cockpit-tools",
+  "antigravity_cockpit_tools",
+  "antigravity-cockpit-tools",
+];
+
+/** The executable base name, lower-cased and without the `.exe` suffix. */
+export function normalizeImageBaseName(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  const base = text.split(/[\\/]/).pop() ?? "";
+  return base.replace(/\.exe$/i, "").trim().toLowerCase();
+}
+
+export function isCockpitImageName(value) {
+  const base = normalizeImageBaseName(value);
+  return base !== "" && COCKPIT_IMAGE_NAMES.includes(base);
+}
+
+/**
+ * `tasklist /FO CSV` wraps every field in double quotes. Only the first column
+ * (the image name) matters here.
+ */
+export function parseTasklistImageNames(stdout) {
+  const names = [];
+  for (const line of String(stdout ?? "").split(/\r?\n/)) {
+    const text = line.trim();
+    if (!text) continue;
+    let name;
+    if (text.startsWith('"')) {
+      const end = text.indexOf('"', 1);
+      name = end > 0 ? text.slice(1, end) : "";
+    } else {
+      name = text.split(",")[0] ?? "";
+    }
+    name = name.trim();
+    if (name) names.push(name);
+  }
+  return names;
+}
+
+/**
+ * Layer 1 of the Cockpit probe.
+ *
+ * `tasklist.exe` is a native system binary, so it keeps working on a locked-down
+ * machine where PowerShell execution is blocked by policy. That distinction is
+ * the whole reason this layer exists first: on the intranet machine the
+ * PowerShell-only probe threw, and the throw aborted an entire check-in sweep.
+ */
+async function probeCockpitByTasklist() {
+  const { stdout } = await execFileAsync("tasklist.exe", ["/FO", "CSV", "/NH"], {
+    timeout: 15000,
+    encoding: "utf8",
+    windowsHide: true,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  const found = parseTasklistImageNames(stdout).filter(isCockpitImageName);
+  return { running: found.length > 0, detail: found.join(", ") };
+}
+
+/** Layer 2: the PowerShell implementation carried over from v1.0.0. */
+async function probeCockpitByPowerShell() {
   const script = `
     $names = @('Cockpit Tools', 'cockpit-tools', 'antigravity_cockpit_tools', 'antigravity-cockpit-tools')
     $items = @(Get-Process -Name $names -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
@@ -113,9 +179,52 @@ export async function isCockpitRunning() {
     $items | ConvertTo-Json -Compress
   `;
   const output = await runPowerShell(script);
-  if (!output) return false;
+  if (!output) return { running: false, detail: "" };
   const parsed = JSON.parse(output);
-  return (Array.isArray(parsed) ? parsed : [parsed]).some(Number.isInteger);
+  const ids = (Array.isArray(parsed) ? parsed : [parsed]).filter(Number.isInteger);
+  return { running: ids.length > 0, detail: ids.map(String).join(", ") };
+}
+
+const COCKPIT_PROBES = [
+  { source: "tasklist", run: probeCockpitByTasklist },
+  { source: "powershell", run: probeCockpitByPowerShell },
+];
+
+/**
+ * Reports whether Cockpit Tools is running.
+ *
+ * `running` is a three-state value on purpose:
+ *   - `true`  — definitively running
+ *   - `false` — definitively not running
+ *   - `null`  — every probe failed, so the answer is unknown
+ *
+ * `null` must never be collapsed into `false`. Both tools rotate the same
+ * refresh tokens, so an unknown answer has to be handled with its own policy
+ * instead of being treated as a green light.
+ */
+export async function probeCockpitTools() {
+  const failures = [];
+  for (const probe of COCKPIT_PROBES) {
+    try {
+      const result = await probe.run();
+      return {
+        running: result.running,
+        source: probe.source,
+        detail: result.detail,
+        error: null,
+        failures,
+      };
+    } catch (error) {
+      failures.push({ source: probe.source, error: error?.message || String(error) });
+    }
+  }
+  return {
+    running: null,
+    source: null,
+    detail: "",
+    error: failures.map((entry) => `${entry.source}: ${entry.error}`).join(" | "),
+    failures,
+  };
 }
 
 async function waitForExit(processIds, timeoutMs) {

@@ -6,6 +6,10 @@
   const API_BASE = "__API_BASE__";
   const API_TOKEN = "__API_TOKEN__";
   const APP_VERSION = "__APP_VERSION__";
+  // Dispatched by the daemon through CDP after any account state change. The
+  // panel is a pure view, so this is how a background sweep reaches an already
+  // open panel without a polling loop on this side.
+  const ACCOUNTS_UPDATED_EVENT = "trae-enhancer:accounts-updated";
 
   window.__traeEnhancerCleanup?.();
   document.getElementById(ROOT_ID)?.remove();
@@ -187,6 +191,152 @@
     #${ROOT_ID} .te-pane[data-pane="about"] {
       overflow: auto;
       padding: 12px;
+    }
+
+    #${ROOT_ID} .te-pane[data-pane="settings"] {
+      overflow: auto;
+      padding: 12px;
+    }
+
+    #${ROOT_ID} .te-settings {
+      display: grid;
+      gap: 12px;
+    }
+
+    #${ROOT_ID} .te-section {
+      padding: 12px;
+      border: 1px solid var(--te-border);
+      border-radius: 11px;
+      background: var(--te-surface);
+    }
+
+    #${ROOT_ID} .te-section-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    #${ROOT_ID} .te-section-hint {
+      margin-top: 6px;
+      color: var(--te-muted);
+      font-size: 11px;
+    }
+
+    #${ROOT_ID} .te-select {
+      width: 100%;
+      height: 34px;
+      margin-top: 10px;
+      padding: 0 8px;
+      border: 1px solid var(--te-border);
+      border-radius: 8px;
+      outline: 0;
+      color: var(--te-text);
+      background: var(--te-panel-solid);
+      font: inherit;
+    }
+
+    #${ROOT_ID} .te-select:focus {
+      border-color: var(--te-accent);
+      box-shadow: 0 0 0 1px var(--te-accent);
+    }
+
+    #${ROOT_ID} .te-status-list {
+      display: grid;
+      gap: 4px;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px dashed var(--te-border);
+      color: var(--te-muted);
+      font-size: 11px;
+    }
+
+    #${ROOT_ID} .te-status-line {
+      display: flex;
+      gap: 6px;
+    }
+
+    #${ROOT_ID} .te-status-line > b {
+      flex: 0 0 auto;
+      color: var(--te-text);
+      font-weight: 650;
+    }
+
+    #${ROOT_ID} .te-status-line > span {
+      min-width: 0;
+      word-break: break-word;
+    }
+
+    #${ROOT_ID} .te-badge {
+      padding: 1px 7px;
+      border: 1px solid var(--te-border);
+      border-radius: 999px;
+      color: var(--te-muted);
+      font-size: 10px;
+      font-weight: 650;
+    }
+
+    #${ROOT_ID} .te-badge.ok { color: #16a34a; border-color: #16a34a66; }
+    #${ROOT_ID} .te-badge.warn { color: #d97706; border-color: #d9770666; }
+
+    #${ROOT_ID} .te-proxy-advanced {
+      margin-top: 12px;
+    }
+
+    #${ROOT_ID} .te-proxy-advanced > summary {
+      cursor: pointer;
+      font-size: 12px;
+      opacity: 0.75;
+      user-select: none;
+    }
+
+    #${ROOT_ID} .te-proxy-advanced[open] > summary {
+      margin-bottom: 8px;
+    }
+
+    #${ROOT_ID} .te-section-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    #${ROOT_ID} .te-probe-output {
+      margin-top: 10px;
+      max-height: 200px;
+      overflow: auto;
+      padding: 9px 10px;
+      border: 1px solid var(--te-border);
+      border-radius: 8px;
+      color: var(--te-muted);
+      background: var(--te-panel-solid);
+      font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, monospace);
+      font-size: 11px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    #${ROOT_ID} .te-restart-banner {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+      padding: 8px 10px;
+      border: 1px solid var(--te-accent);
+      border-radius: 9px;
+      background: color-mix(in srgb, var(--te-accent) 12%, transparent);
+      font-size: 11px;
+    }
+
+    #${ROOT_ID} .te-restart-banner.show { display: flex; }
+    #${ROOT_ID} .te-restart-banner button { margin-left: auto; flex: 0 0 auto; }
+
+    /* The section cards already use the surface colour, so the controls inside
+       them need the solid panel colour to stay distinguishable. */
+    #${ROOT_ID} .te-pane[data-pane="settings"] .te-secondary,
+    #${ROOT_ID} .te-pane[data-pane="settings"] .te-field input {
+      background: var(--te-panel-solid);
     }
 
     #${ROOT_ID} .te-about {
@@ -796,6 +946,13 @@
       </svg>
       <span>账号</span>
     </button>
+    <button class="te-tab" type="button" data-tab="settings">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 8.9 19.3a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.7 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.1A1.7 1.7 0 0 0 15.1 4.7a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9v.1a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1.02z"/>
+      </svg>
+      <span>设置</span>
+    </button>
     <button class="te-tab" type="button" data-tab="about">
       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="10"/>
@@ -910,7 +1067,78 @@
     </div>
   `;
 
-  content.append(accountPane, aboutPane);
+  const settingsPane = document.createElement("div");
+  settingsPane.className = "te-pane";
+  settingsPane.dataset.pane = "settings";
+  settingsPane.innerHTML = `
+    <div class="te-settings">
+      <div class="te-section">
+        <div class="te-section-title">
+          <span>网络代理</span>
+          <span class="te-badge te-proxy-badge">未读取</span>
+        </div>
+        <div class="te-section-hint">
+          内网机器上「TRAE 能上网、助手却报错」，通常就是这里没配对：TRAE 跟随 Windows 系统代理，助手默认不跟随。
+        </div>
+        <select class="te-select te-proxy-mode"></select>
+        <div class="te-section-hint te-proxy-mode-desc"></div>
+        <label class="te-field te-proxy-url-field" hidden>
+          <span>代理地址</span>
+          <input class="te-proxy-url" type="text" spellcheck="false" placeholder="127.0.0.1:7890 或 http://127.0.0.1:7890">
+        </label>
+        <label class="te-field te-proxy-noproxy-field" hidden>
+          <span>附加直连地址（可选，逗号分隔）</span>
+          <input class="te-proxy-noproxy" type="text" spellcheck="false" placeholder="*.corp.example.com">
+        </label>
+        <div class="te-status-list te-proxy-status"></div>
+        <div class="te-section-actions">
+          <button class="te-secondary te-proxy-reload" type="button">重新读取</button>
+          <button class="te-secondary te-proxy-test" type="button">测试连接</button>
+          <button class="te-primary te-proxy-save" type="button">保存</button>
+        </div>
+        <div class="te-restart-banner te-proxy-restart">
+          <span>已保存，重启守护进程后才会生效。</span>
+          <button class="te-secondary te-daemon-restart" type="button">立即重启</button>
+        </div>
+        <details class="te-proxy-advanced">
+          <summary>高级信息与诊断</summary>
+          <div class="te-status-list te-proxy-detail"></div>
+          <div class="te-probe-output te-proxy-probe" hidden></div>
+        </details>
+      </div>
+      <div class="te-section">
+        <div class="te-section-title">
+          <span>TRAE 自动更新</span>
+          <span class="te-badge te-trae-badge">未读取</span>
+        </div>
+        <div class="te-section-hint">
+          TRAE 默认每 60 分钟检查一次更新，更新后必须重启 TRAE，正在使用的助手会中断。关闭检查不影响手动更新：仍然可以在 TRAE 的菜单里手动检查。
+        </div>
+        <select class="te-select te-trae-mode">
+          <option value="suppress">禁止自动更新（推荐）</option>
+          <option value="allow">允许自动更新</option>
+        </select>
+        <div class="te-status-list te-trae-status"></div>
+        <div class="te-section-actions">
+          <button class="te-primary te-trae-save" type="button">保存</button>
+        </div>
+        <div class="te-restart-banner te-trae-restart">
+          <span>已保存，重启 TRAE 后生效。</span>
+        </div>
+      </div>
+      <div class="te-section">
+        <div class="te-section-title">守护进程</div>
+        <div class="te-section-hint">
+          重启只会重启助手自己的后台服务，不影响 TRAE，也不会退出已登录的账号。面板通常几秒内自动恢复。
+        </div>
+        <div class="te-section-actions">
+          <button class="te-secondary te-daemon-restart" type="button">重启守护进程</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  content.append(accountPane, settingsPane, aboutPane);
 
   const footer = document.createElement("div");
   footer.className = "te-footer";
@@ -1009,6 +1237,10 @@
   let transferBusy = false;
   let transferSubmit = null;
   let checkinBusy = false;
+  // True while the daemon is reconciling check-in state after the panel was
+  // opened. Accounts without a confirmed record show "同步中" instead of the
+  // misleading "待签到" during that window.
+  let syncingCheckin = false;
 
   function loginSessionSeen(sessionId) {
     if (!sessionId) return false;
@@ -1104,6 +1336,17 @@
         label: "失败",
         state: "error",
         title: checkin.error,
+      };
+    }
+    // The daemon reconciles against the server when the panel opens. Until it
+    // answers, "待签到" would be a guess: the account may already be checked in
+    // and simply have no local record yet, which is the case reported on the
+    // intranet machine.
+    if (syncingCheckin) {
+      return {
+        label: "同步中",
+        state: "pending",
+        title: "正在向服务端核对今日签到状态",
       };
     }
     return {
@@ -1339,7 +1582,7 @@
   }
 
   function switchTab(name) {
-    activeTab = name === "about" ? "about" : "account";
+    activeTab = name === "about" ? "about" : name === "settings" ? "settings" : "account";
     tabs.querySelectorAll(".te-tab").forEach((tab) => {
       tab.classList.toggle("active", tab.dataset.tab === activeTab);
     });
@@ -1347,7 +1590,14 @@
       pane.classList.toggle("active", pane.dataset.pane === activeTab);
     });
     header.querySelector(".te-subtitle").textContent =
-      activeTab === "about" ? `v${APP_VERSION}` : `账号 ${accountCount}`;
+      activeTab === "about"
+        ? `v${APP_VERSION}`
+        : activeTab === "settings"
+          ? "设置"
+          : `账号 ${accountCount}`;
+    // Read once, then keep whatever the user has typed: re-reading on every tab
+    // switch would silently discard an edit in progress.
+    if (activeTab === "settings" && !settingsLoaded) loadSettings().catch(() => {});
   }
 
   function shouldRefreshInsights(accounts) {
@@ -1382,6 +1632,410 @@
       if (manual) button.disabled = false;
     }
   }
+
+  /**
+   * Asks the daemon to reconcile today's check-in state and credits, then repaints.
+   *
+   * Used when the panel opens and right after an import. An imported backup carries
+   * only authentication state, so those accounts have no check-in record and no
+   * credits until the daemon fills them in.
+   *
+   * `checkinOneAccount()` is idempotent: an account that is already checked in is
+   * recorded as such without claiming a second reward. That is what turns the
+   * reported "actually checked in, but the panel says pending" into the correct
+   * display without the user pressing anything.
+   *
+   * Returns the daemon result, or null when the request itself failed.
+   */
+  async function reconcileWithDaemon() {
+    let result = null;
+    try {
+      result = await api("/api/accounts/panel-open", { method: "POST", body: "{}" });
+    } catch {
+      result = null;
+    } finally {
+      syncingCheckin = false;
+    }
+    try {
+      await refresh();
+    } catch {
+      // A later daemon push repaints the panel.
+    }
+    return result;
+  }
+
+  /* ----------------------------------------------------------------------- *
+   * Settings tab
+   *
+   * The daemon saves the proxy configuration but cannot adopt it: Node reads its
+   * proxy variables once, at start-up. So every save says "restart to take effect"
+   * and offers the restart, rather than letting the panel imply that saved means
+   * live — which is exactly the confusion that produced the intranet report.
+   * ----------------------------------------------------------------------- */
+
+  const settingsUi = {
+    mode: settingsPane.querySelector(".te-proxy-mode"),
+    modeDesc: settingsPane.querySelector(".te-proxy-mode-desc"),
+    urlField: settingsPane.querySelector(".te-proxy-url-field"),
+    url: settingsPane.querySelector(".te-proxy-url"),
+    noProxyField: settingsPane.querySelector(".te-proxy-noproxy-field"),
+    noProxy: settingsPane.querySelector(".te-proxy-noproxy"),
+    status: settingsPane.querySelector(".te-proxy-status"),
+    detail: settingsPane.querySelector(".te-proxy-detail"),
+    advanced: settingsPane.querySelector(".te-proxy-advanced"),
+    badge: settingsPane.querySelector(".te-proxy-badge"),
+    probe: settingsPane.querySelector(".te-proxy-probe"),
+    restartBanner: settingsPane.querySelector(".te-proxy-restart"),
+    reload: settingsPane.querySelector(".te-proxy-reload"),
+    test: settingsPane.querySelector(".te-proxy-test"),
+    save: settingsPane.querySelector(".te-proxy-save"),
+    restartButtons: Array.from(settingsPane.querySelectorAll(".te-daemon-restart")),
+    traeMode: settingsPane.querySelector(".te-trae-mode"),
+    traeBadge: settingsPane.querySelector(".te-trae-badge"),
+    traeStatus: settingsPane.querySelector(".te-trae-status"),
+    traeSave: settingsPane.querySelector(".te-trae-save"),
+    traeRestartBanner: settingsPane.querySelector(".te-trae-restart"),
+  };
+  let settingsModes = [];
+  let settingsLoaded = false;
+  let lastSavedForm = null;
+  let traeUpdateNoticeShown = false;
+
+  function appendStatusLine(container, label, value) {
+    const line = document.createElement("div");
+    line.className = "te-status-line";
+    const key = document.createElement("b");
+    key.textContent = label;
+    const text = document.createElement("span");
+    text.textContent = value;
+    line.append(key, text);
+    container.append(line);
+  }
+
+  function proxyModeLabel(value) {
+    return settingsModes.find((mode) => mode.value === value)?.label ?? value ?? "-";
+  }
+
+  function currentProxyForm() {
+    return {
+      mode: settingsUi.mode.value || "system",
+      url: settingsUi.url.value.trim() || null,
+      noProxy: settingsUi.noProxy.value.trim(),
+    };
+  }
+
+  function applyProxyModeVisibility(mode) {
+    settingsUi.urlField.hidden = mode !== "manual";
+    // Only the modes that can carry extra direct addresses expose the field.
+    settingsUi.noProxyField.hidden = mode !== "manual" && mode !== "system";
+    settingsUi.modeDesc.textContent =
+      settingsModes.find((entry) => entry.value === mode)?.description ?? "";
+  }
+
+  function renderProxyState(network) {
+    const state = network.state ?? {};
+    const active = Boolean(state.active);
+    const live = active && Boolean(network.activeInThisProcess);
+    settingsUi.badge.className = `te-badge te-proxy-badge${active ? (live ? " ok" : " warn") : ""}`;
+    settingsUi.badge.textContent = active ? (live ? "已生效" : "待重启") : "未使用代理";
+
+    settingsUi.status.textContent = "";
+    appendStatusLine(
+      settingsUi.status,
+      "解析结果",
+      active ? `生效，来源：${proxyModeLabel(state.source)}` : "未生效",
+    );
+    if (active && !live) {
+      appendStatusLine(
+        settingsUi.status,
+        "当前进程",
+        "本进程启动时还没有这个代理，重启后才会生效。",
+      );
+    }
+    for (const note of state.notes ?? []) {
+      appendStatusLine(settingsUi.status, "说明", note);
+    }
+
+    // Everything below is detail that only matters while diagnosing, so it sits
+    // behind the disclosure instead of competing with the mode selector.
+    settingsUi.detail.textContent = "";
+    appendStatusLine(settingsUi.detail, "配置文件", network.configPath ?? "-");
+    if (state.resolvedNames?.length) {
+      appendStatusLine(settingsUi.detail, "已设置变量", state.resolvedNames.join(", "));
+    }
+    if (state.system) {
+      appendStatusLine(settingsUi.detail, "系统代理", state.system.enabled ? "已启用" : "未启用");
+      if (state.system.hasServer) appendStatusLine(settingsUi.detail, "系统地址", state.system.server);
+      if (state.system.override) appendStatusLine(settingsUi.detail, "系统例外", state.system.override);
+      if (state.system.hasAutoConfigUrl) {
+        appendStatusLine(settingsUi.detail, "自动配置脚本", state.system.autoConfigUrl);
+      }
+    }
+    if (state.systemReadError) {
+      appendStatusLine(settingsUi.detail, "系统代理读取", state.systemReadError);
+    }
+  }
+
+  /**
+   * Renders the TRAE auto-update section.
+   *
+   * The value in the file and the saved preference are reported separately: TRAE
+   * reads `update.mode` when it starts, so a freshly written value is not live yet,
+   * and a section that only said "已禁止" would be wrong until TRAE restarts.
+   */
+  function renderTraeUpdate(update) {
+    if (!update) return;
+    const readable = update.readable !== false;
+    const suppressed = Boolean(update.settingsSuppressed);
+    settingsUi.traeBadge.className = `te-badge te-trae-badge${readable ? (suppressed ? " ok" : " warn") : " warn"}`;
+    settingsUi.traeBadge.textContent = readable ? (suppressed ? "已禁止" : "未禁止") : "读取失败";
+    settingsUi.traeMode.value = update.suppress ? "suppress" : "allow";
+
+    settingsUi.traeStatus.textContent = "";
+    appendStatusLine(settingsUi.traeStatus, "设置文件", update.path ?? "-");
+    appendStatusLine(
+      settingsUi.traeStatus,
+      "文件中的值",
+      readable
+        ? update.settingsExists
+          ? update.fileMode
+            ? `update.mode = ${update.fileMode}`
+            : "未写入（TRAE 使用默认值，每 60 分钟检查一次）"
+          : "文件不存在"
+        : "无法读取",
+    );
+    if (update.error) appendStatusLine(settingsUi.traeStatus, "错误", update.error);
+    if (update.backupPath) {
+      appendStatusLine(settingsUi.traeStatus, "改动前备份", update.backupPath);
+    }
+    if (update.startupNotice && !traeUpdateNoticeShown) {
+      traeUpdateNoticeShown = true;
+      appendStatusLine(
+        settingsUi.traeStatus,
+        "本次启动",
+        "已自动写入一次（这是默认设置）。不想改动 TRAE 的配置文件，就在下面选择「允许自动更新」并保存。",
+      );
+      showToast("已自动为 TRAE 关闭自动更新，可在设置里改回");
+    }
+  }
+
+  async function saveTraeUpdate() {
+    const suppress = settingsUi.traeMode.value !== "allow";
+    settingsUi.traeSave.disabled = true;
+    try {
+      const data = await api("/api/settings/trae-update", {
+        method: "POST",
+        body: JSON.stringify({ suppress }),
+      });
+      renderTraeUpdate(data.traeUpdate);
+      if (data.traeUpdate?.changed === false) {
+        settingsUi.traeRestartBanner.classList.remove("show");
+        showToast("TRAE 的设置本来就是这个值，没有改动");
+      } else {
+        settingsUi.traeRestartBanner.classList.add("show");
+        showToast(suppress ? "已禁止 TRAE 自动更新，重启 TRAE 后生效" : "已恢复 TRAE 自动更新，重启 TRAE 后生效");
+      }
+    } catch (error) {
+      showToast(error.message || String(error), true);
+    } finally {
+      settingsUi.traeSave.disabled = false;
+    }
+  }
+
+  async function loadSettings({ silent = false } = {}) {
+    if (!silent) {
+      settingsUi.badge.className = "te-badge te-proxy-badge";
+      settingsUi.badge.textContent = "读取中";
+    }
+    settingsUi.status.textContent = "";
+    try {
+      const data = await api("/api/settings");
+      const network = data.network ?? {};
+      const selected = network.state?.mode ?? "system";
+      // `env` stays in the data model because v1.0.0 configs migrate into it, but
+      // it is not offered as a choice: the three modes cover what a user needs and
+      // the fourth only added noise. It is still listed while it *is* the current
+      // value, so a migrated config is never displayed as something else.
+      settingsModes = (network.modes ?? []).filter(
+        (mode) => mode.value !== "env" || mode.value === selected,
+      );
+      settingsUi.mode.textContent = "";
+      for (const mode of settingsModes) {
+        const option = document.createElement("option");
+        option.value = mode.value;
+        option.textContent = mode.label;
+        settingsUi.mode.append(option);
+      }
+      settingsUi.mode.value = settingsModes.some((mode) => mode.value === selected)
+        ? selected
+        : "system";
+      settingsUi.url.value = network.state?.url ?? "";
+      settingsUi.noProxy.value = network.state?.noProxy ?? "";
+      applyProxyModeVisibility(settingsUi.mode.value);
+      renderProxyState(network);
+      renderTraeUpdate(data.traeUpdate);
+      lastSavedForm = currentProxyForm();
+      settingsLoaded = true;
+    } catch (error) {
+      settingsUi.badge.className = "te-badge te-proxy-badge warn";
+      settingsUi.badge.textContent = "读取失败";
+      settingsUi.traeBadge.className = "te-badge te-trae-badge warn";
+      settingsUi.traeBadge.textContent = "读取失败";
+      settingsUi.traeStatus.textContent = "";
+      appendStatusLine(settingsUi.traeStatus, "错误", error.message || String(error));
+      appendStatusLine(settingsUi.status, "错误", error.message || String(error));
+    }
+  }
+
+  function formatProbeReport(result) {
+    const lines = [`探测目标：${(result.hosts ?? []).join("、")}`, "", "直连："];
+    if (result.direct?.error) lines.push(`  ${result.direct.error}`);
+    for (const line of result.direct?.lines ?? []) lines.push(`  ${line}`);
+    lines.push("");
+    if (result.proxied) {
+      lines.push(`走配置代理（来源：${proxyModeLabel(result.state?.source)}）：`);
+      if (result.proxied.error) lines.push(`  ${result.proxied.error}`);
+      for (const line of result.proxied.lines ?? []) lines.push(`  ${line}`);
+    } else {
+      lines.push("走配置代理：当前配置没有解析出可用代理，已跳过。");
+      for (const note of result.state?.notes ?? []) lines.push(`  ${note}`);
+    }
+    lines.push("", result.conclusionText ?? "");
+    return lines.join("\n");
+  }
+
+  function setSettingsBusy(busy) {
+    for (const button of [settingsUi.reload, settingsUi.test, settingsUi.save]) {
+      button.disabled = busy;
+    }
+  }
+
+  async function testProxyConnection() {
+    const form = currentProxyForm();
+    if (form.mode === "manual" && !form.url) {
+      showToast("手动模式需要先填写代理地址", true);
+      return;
+    }
+    setSettingsBusy(true);
+    // The output sits behind the disclosure, so open it or the result is invisible.
+    settingsUi.advanced.open = true;
+    settingsUi.probe.hidden = false;
+    settingsUi.probe.textContent = "正在探测（直连 + 配置代理），大约需要几秒...";
+    try {
+      const result = await api("/api/settings/network/test", {
+        method: "POST",
+        body: JSON.stringify({ proxy: form }),
+      });
+      settingsUi.probe.textContent = formatProbeReport(result);
+      showToast(result.conclusionText ?? "探测完成", result.conclusion === "none");
+    } catch (error) {
+      settingsUi.probe.textContent = error.message || String(error);
+      showToast(error.message || String(error), true);
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  async function saveProxySettings() {
+    const form = currentProxyForm();
+    if (form.mode === "manual" && !form.url) {
+      showToast("手动模式需要先填写代理地址", true);
+      return;
+    }
+    setSettingsBusy(true);
+    try {
+      const data = await api("/api/settings/network", {
+        method: "POST",
+        body: JSON.stringify({ proxy: form }),
+      });
+      const network = data.network ?? {};
+      settingsModes = network.modes ?? settingsModes;
+      renderProxyState(network);
+      // Restarting is only worth insisting on when the running process does not
+      // already use exactly these values.
+      const previous = lastSavedForm;
+      const unchanged =
+        previous !== null &&
+        previous.mode === form.mode &&
+        previous.url === form.url &&
+        previous.noProxy === form.noProxy &&
+        Boolean(network.activeInThisProcess);
+      lastSavedForm = { ...form };
+      if (!data.restartRequired || unchanged) {
+        settingsUi.restartBanner.classList.remove("show");
+        showToast(unchanged ? "代理配置没有变化" : "已保存");
+      } else {
+        settingsUi.restartBanner.classList.add("show");
+        showToast("已保存，重启守护进程后生效");
+      }
+    } catch (error) {
+      showToast(error.message || String(error), true);
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  /**
+   * Polls health until the daemon answers again. The restart is asynchronous by
+   * design: the helper has to outlive the process it replaces.
+   */
+  async function waitForDaemonReady({ timeoutMs = 60000 } = {}) {
+    const deadline = Date.now() + timeoutMs;
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch(`${API_BASE}/api/health`, { cache: "no-store" });
+        if (response.ok) return true;
+      } catch {
+        // Still down; keep waiting.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    }
+    return false;
+  }
+
+  async function requestDaemonRestart() {
+    for (const button of settingsUi.restartButtons) button.disabled = true;
+    showToast("正在重启守护进程...");
+    try {
+      await api("/api/daemon/restart", { method: "POST", body: "{}" });
+    } catch (error) {
+      for (const button of settingsUi.restartButtons) button.disabled = false;
+      showToast(error.message || String(error), true);
+      return;
+    }
+    const ready = await waitForDaemonReady();
+    for (const button of settingsUi.restartButtons) button.disabled = false;
+    if (!ready) {
+      showToast("守护进程没有在预期时间内恢复，请查看日志", true);
+      return;
+    }
+    showToast("守护进程已重启");
+    settingsUi.restartBanner.classList.remove("show");
+    await loadSettings();
+    refresh().catch(() => {});
+  }
+
+  /**
+   * The daemon pushes this after any account state change. Nothing is requested
+   * while the panel is closed, and the handler never asks for a credit refresh:
+   * the daemon already pushes after its own refresh, so asking again here would
+   * loop. The 150ms debounce collapses a burst of changes into one repaint.
+   *
+   * The listener is removed by `__traeEnhancerCleanup`, because the daemon
+   * re-injects this script every time CDP reconnects.
+   */
+  let accountsUpdatedPending = false;
+  let accountsUpdatedTimer = null;
+  function handleAccountsUpdated() {
+    if (!panel.classList.contains("open") || accountsUpdatedPending) return;
+    accountsUpdatedPending = true;
+    accountsUpdatedTimer = setTimeout(() => {
+      accountsUpdatedPending = false;
+      if (panel.classList.contains("open")) refresh().catch(() => {});
+    }, 150);
+  }
+  window.addEventListener(ACCOUNTS_UPDATED_EVENT, handleAccountsUpdated);
 
   function failureDetails(result) {
     const failures = Array.isArray(result?.results)
@@ -1864,8 +2518,13 @@
           ? `，新增 ${result.imported}，更新 ${result.updated}`
           : "";
         showToast(`已导入 ${result.count} 个账号${detail}`);
-        await refresh();
         closeTransferDialog();
+        // An imported backup carries only authentication state, so these accounts
+        // have no check-in record and no credits. Ask the daemon to reconcile them
+        // right away instead of leaving them pending until the panel is reopened.
+        syncingCheckin = true;
+        await refresh();
+        await reconcileWithDaemon();
       };
     } catch (error) {
       showToast(error.message || String(error), true);
@@ -1875,17 +2534,28 @@
 
   function openPanel() {
     panel.classList.add("open");
+    // Paint "同步中" first: until the daemon answers, an account with no local
+    // check-in record may well already be checked in on the server.
+    syncingCheckin = true;
     refresh()
       .then(async (data) => {
         if (data?.accounts && !data.currentAccountId) {
           const backup = await autoBackupCurrent();
           if (backup) data = await refresh();
         }
-        if (data?.accounts && shouldRefreshInsights(data.accounts)) {
-          refreshAccountInsights().catch(() => {});
+        const result = await reconcileWithDaemon();
+        // The daemon orchestrates check-in and credits whenever it is free. When it
+        // is busy or blocked by Cockpit Tools, fall back to v1.0.0's own credit
+        // refresh so opening the panel never regresses.
+        if (!result || result.busy || result.skipped) {
+          if (data?.accounts && shouldRefreshInsights(data.accounts)) {
+            refreshAccountInsights().catch(() => {});
+          }
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        syncingCheckin = false;
+      });
   }
 
   function closePanel() {
@@ -1918,6 +2588,27 @@
   tabs.querySelectorAll(".te-tab").forEach((tab) => {
     tab.addEventListener("click", () => switchTab(tab.dataset.tab));
   });
+  settingsUi.mode.addEventListener("change", () => {
+    applyProxyModeVisibility(settingsUi.mode.value);
+  });
+  settingsUi.reload.addEventListener("click", () => {
+    // An explicit re-read is allowed to overwrite the form, it is the user's ask.
+    loadSettings().catch(() => {});
+  });
+  settingsUi.test.addEventListener("click", () => {
+    testProxyConnection().catch(() => {});
+  });
+  settingsUi.save.addEventListener("click", () => {
+    saveProxySettings().catch(() => {});
+  });
+  settingsUi.traeSave.addEventListener("click", () => {
+    saveTraeUpdate().catch(() => {});
+  });
+  for (const button of settingsUi.restartButtons) {
+    button.addEventListener("click", () => {
+      requestDaemonRestart().catch(() => {});
+    });
+  }
   list.addEventListener("click", (event) => {
     const button = event.target.closest(".te-acc-switch");
     if (!button?.dataset.accountId) return;
@@ -1998,6 +2689,8 @@
 
   window.__traeEnhancerCleanup = () => {
     clearTimeout(toastTimer);
+    clearTimeout(accountsUpdatedTimer);
+    window.removeEventListener(ACCOUNTS_UPDATED_EVENT, handleAccountsUpdated);
     stopOAuthPolling();
     stopFakeLogoutPolling();
     root.remove();

@@ -196,3 +196,57 @@ test("account keepalive metadata is exposed without touching snapshots", async (
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 });
+
+test("the live identity is reported as matched, not-managed or unknown", async () => {
+  const dataDir = await tempDir();
+  try {
+    const store = new AccountStore(dataDir);
+
+    // Nothing saved yet, so the live account is simply not one we manage.
+    assert.deepEqual(await store.resolveActiveAccount(storageFixture()), {
+      id: null,
+      state: "not-managed",
+    });
+
+    const saved = await store.backupCurrent(storageFixture(), { now: 100 });
+    assert.deepEqual(await store.resolveActiveAccount(storageFixture()), {
+      id: saved.account.id,
+      state: "matched",
+    });
+
+    // No usable identity in storage: the question cannot be answered, and this is
+    // the state in which rotating a refresh token is unsafe.
+    assert.deepEqual(await store.resolveActiveAccount({ theme: "dark" }), {
+      id: null,
+      state: "unknown",
+    });
+  } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("an account outside the saved list is not-managed rather than unknown", async () => {
+  const dataDir = await tempDir();
+  try {
+    const store = new AccountStore(dataDir);
+    await store.backupCurrent(storageFixture(), { now: 100 });
+
+    // TRAE holds a different account. Rotating anything we saved cannot disturb
+    // that session, so keep-alive must not be blocked by a false "unknown".
+    const otherRoot = {
+      ...storageFixture(),
+      "iCubeServerData://icube.cloudide": JSON.stringify({
+        account: { userId: "9999999999999999", email: "other@example.com" },
+      }),
+      "iCubeEntitlementInfo://icube.cloudide": JSON.stringify({
+        entitlement_base_info: { user_id: "9999999999999999" },
+      }),
+    };
+    assert.deepEqual(await store.resolveActiveAccount(otherRoot), {
+      id: null,
+      state: "not-managed",
+    });
+  } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});

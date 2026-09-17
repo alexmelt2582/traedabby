@@ -390,14 +390,24 @@ export class AccountStore {
     return index.accounts.find((record) => record.id === accountId) || null;
   }
 
-  async resolveCurrentAccountId(storageRoot) {
+  /**
+   * Which saved account TRAE is signed in as right now — and whether that could
+   * be determined at all.
+   *
+   * The distinction matters before any credential rotation. `not-managed` is
+   * safe: TRAE holds an account this tool does not manage, so refreshing a saved
+   * account cannot disturb that session. `unknown` is not safe: we cannot tell
+   * which account TRAE holds, so rotating could invalidate the live login.
+   * Callers must refuse to rotate while the state is `unknown`.
+   */
+  async resolveActiveAccount(storageRoot) {
     let identity;
     try {
       identity = extractIdentityFromSnapshot(extractAuthSnapshot(storageRoot));
     } catch {
-      return null;
+      return { id: null, state: "unknown" };
     }
-    if (!identity.userId && !identity.email) return null;
+    if (!identity.userId && !identity.email) return { id: null, state: "unknown" };
     const index = await this.readIndex();
     const record = index.accounts.find((candidate) => {
       if (identity.userId && candidate.userId) {
@@ -408,6 +418,10 @@ export class AccountStore {
       }
       return false;
     });
-    return record?.id || null;
+    return record ? { id: record.id, state: "matched" } : { id: null, state: "not-managed" };
+  }
+
+  async resolveCurrentAccountId(storageRoot) {
+    return (await this.resolveActiveAccount(storageRoot)).id;
   }
 }
