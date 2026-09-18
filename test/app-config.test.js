@@ -22,7 +22,7 @@ import {
   saveAppConfig,
 } from "../src/lib/app-config.js";
 
-const DEFAULT_PROXY = { mode: "system", url: null, noProxy: "" };
+const DEFAULT_PROXY = { mode: "off", url: null, noProxy: "" };
 const DEFAULT_TRAE_UPDATE = { suppress: true, previousMode: null };
 const DEFAULTS = {
   traeExe: null,
@@ -68,10 +68,11 @@ test("the legacy environment proxy switch still accepts explicit values", () => 
   assert.throws(() => normalizeUseEnvProxy(7), /must be a boolean/);
 });
 
-test("the proxy mode defaults to following the system proxy", () => {
-  assert.equal(normalizeProxyMode(undefined), "system");
-  assert.equal(normalizeProxyMode(null), "system");
-  assert.equal(normalizeProxyMode(""), "system");
+test("the proxy mode defaults to off so no machine is opted into a proxy", () => {
+  assert.equal(normalizeProxyMode(undefined), "off");
+  assert.equal(normalizeProxyMode(null), "off");
+  assert.equal(normalizeProxyMode(""), "off");
+  // An explicit value is still honoured, and stays case and space insensitive.
   assert.equal(normalizeProxyMode(" SYSTEM "), "system");
   assert.equal(normalizeProxyMode("manual"), "manual");
   assert.equal(normalizeProxyMode("env"), "env");

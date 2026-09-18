@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   anyProxyConfigured,
+  classifyProbeFailure,
   describeErrorChain,
+  describeProbeVerdict,
   formatProbeLine,
   probeSucceeded,
   proxyChildEnv,
@@ -12,6 +14,7 @@ import {
   redactQueryValues,
   redactUrl,
   stripProxyEnv,
+  summarizeProbeFailure,
 } from "../src/lib/net-diagnostics.js";
 
 function withCause(message, cause, extra = {}) {
@@ -192,4 +195,138 @@ test("a reachable proxy result is successful even when local DNS failed", () => 
   assert.match(formatProbeLine(result), /可达，HTTP 200/);
   assert.match(formatProbeLine(result), /本地 DNS 失败/);
   assert.equal(probeSucceeded({ dnsError: "x", httpStatus: null, error: null }), false);
+});
+
+/* -------------------------------------------------------------------------- *
+ * Failure classification
+ *
+ * These exist because the three-way "direct / proxy / neither" verdict sent an
+ * intranet user to re-check a proxy address that was already correct: the real
+ * failure was a certificate the machine did not trust. Each reason must now
+ * produce its own instruction.
+ * -------------------------------------------------------------------------- */
+
+test("a certificate rejection is never reported as a wrong proxy address", () => {
+  const chain =
+    "fetch failed → unable to get local issuer certificate | UNABLE_TO_GET_ISSUER_CERT_LOCALLY";
+  assert.equal(classifyProbeFailure(chain), "certificate");
+  assert.equal(classifyProbeFailure("fetch failed → DEPTH_ZERO_SELF_SIGNED_CERT"), "certificate");
+  assert.equal(classifyProbeFailure("fetch failed → SELF_SIGNED_CERT_IN_CHAIN"), "certificate");
+});
+
+test("every other transport failure maps to its own reason", () => {
+  assert.equal(classifyProbeFailure("fetch failed → connect ECONNREFUSED 127.0.0.1:9"), "refused");
+  assert.equal(classifyProbeFailure("fetch failed → getaddrinfo ENOTFOUND api.trae.cn"), "dns");
+  assert.equal(
+    classifyProbeFailure("fetch failed → The operation was aborted due to timeout"),
+    "timeout",
+  );
+  assert.equal(classifyProbeFailure("407 Proxy Authentication Required"), "auth");
+  assert.equal(classifyProbeFailure("something else entirely"), "other");
+  assert.equal(classifyProbeFailure(""), null);
+  assert.equal(classifyProbeFailure(null), null);
+});
+
+test("a certificate failure outranks a timeout reported by another host", () => {
+  // Both appear across the three probed hosts. Only the certificate one tells an
+  // intranet user something they can act on, so it has to win.
+  const kind = summarizeProbeFailure([
+    { error: "fetch failed → The operation was aborted due to timeout" },
+    { error: "fetch failed → UNABLE_TO_GET_ISSUER_CERT_LOCALLY" },
+    { error: "fetch failed → UNABLE_TO_GET_ISSUER_CERT_LOCALLY" },
+  ]);
+  assert.equal(kind, "certificate");
+});
+
+test("a probe run with no failures summarises to nothing", () => {
+  assert.equal(summarizeProbeFailure([]), null);
+  assert.equal(summarizeProbeFailure([{ error: null, httpStatus: 200 }]), null);
+  assert.equal(summarizeProbeFailure(null), null);
+});
+
+/* --- verdict --------------------------------------------------------------- */
+
+const RUN_OK = { reachable: true, results: [{ error: null, httpStatus: 200 }] };
+const RUN_TIMEOUT = {
+  reachable: false,
+  results: [{ error: "fetch failed → The operation was aborted due to timeout" }],
+};
+
+function failingWith(error) {
+  return { reachable: false, results: [{ error }] };
+}
+
+test("a working direct connection needs no proxy", () => {
+  const verdict = describeProbeVerdict({ direct: RUN_OK });
+  assert.equal(verdict.conclusion, "direct");
+  assert.equal(verdict.severity, "ok");
+});
+
+test("a working proxy is reported as usable", () => {
+  const verdict = describeProbeVerdict({ direct: RUN_TIMEOUT, proxied: RUN_OK });
+  assert.equal(verdict.conclusion, "proxy");
+  assert.equal(verdict.severity, "ok");
+});
+
+test("a usable system proxy is a hint the user can act on, not an error", () => {
+  // The saved mode defaults to off, so this is how an intranet user finds out
+  // which setting to change.
+  const verdict = describeProbeVerdict({
+    direct: RUN_TIMEOUT,
+    proxied: null,
+    suggestion: RUN_OK,
+  });
+  assert.equal(verdict.conclusion, "system-proxy");
+  assert.equal(verdict.severity, "hint");
+  assert.match(verdict.text, /跟随系统代理/);
+});
+
+test("a certificate failure names the certificate and not the proxy address", () => {
+  const verdict = describeProbeVerdict({
+    direct: RUN_TIMEOUT,
+    proxied: failingWith("fetch failed → UNABLE_TO_GET_ISSUER_CERT_LOCALLY"),
+  });
+  assert.equal(verdict.conclusion, "certificate");
+  assert.equal(verdict.severity, "error");
+  assert.match(verdict.text, /证书/);
+  assert.doesNotMatch(verdict.text, /核对代理地址/);
+});
+
+test("a 407 says the proxy wants credentials rather than blaming the address", () => {
+  const verdict = describeProbeVerdict({
+    direct: RUN_TIMEOUT,
+    proxied: failingWith("407 Proxy Authentication Required"),
+  });
+  assert.equal(verdict.conclusion, "auth");
+  assert.match(verdict.text, /407/);
+  assert.doesNotMatch(verdict.text, /核对代理地址/);
+});
+
+test("a refused connection is the case that does ask about the address", () => {
+  const verdict = describeProbeVerdict({
+    direct: RUN_TIMEOUT,
+    proxied: failingWith("fetch failed → connect ECONNREFUSED 127.0.0.1:9"),
+  });
+  assert.equal(verdict.conclusion, "refused");
+  assert.match(verdict.text, /核对代理地址/);
+});
+
+test("a timeout on an intranet machine still points at the proxy setting", () => {
+  const verdict = describeProbeVerdict({ direct: RUN_TIMEOUT });
+  assert.equal(verdict.conclusion, "timeout");
+  assert.match(verdict.text, /跟随系统代理/);
+});
+
+test("every verdict carries readable text and a known severity", () => {
+  for (const input of [
+    { direct: RUN_OK },
+    { direct: RUN_TIMEOUT, proxied: RUN_OK },
+    { direct: RUN_TIMEOUT, suggestion: RUN_OK },
+    { direct: RUN_TIMEOUT },
+    {},
+  ]) {
+    const verdict = describeProbeVerdict(input);
+    assert.ok(verdict.text.length > 0, "a verdict must never be empty");
+    assert.ok(["ok", "hint", "error"].includes(verdict.severity));
+  }
 });

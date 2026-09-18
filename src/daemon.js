@@ -37,6 +37,7 @@ import { serviceSpec } from "./lib/launch-spec.js";
 import {
   STATIC_HOSTS,
   describeErrorChain,
+  describeProbeVerdict,
   formatProbeLine,
   probeHosts,
   probeSucceeded,
@@ -46,6 +47,7 @@ import {
   stripProxyEnv,
 } from "./lib/net-diagnostics.js";
 import { DAEMON_LOG_PATH } from "./lib/runtime-paths.js";
+import { enableSystemCACertificates, formatCAStatus } from "./lib/system-ca.js";
 import {
   PROXY_MODE_DESCRIPTIONS,
   PROXY_MODE_LABELS,
@@ -79,6 +81,7 @@ import {
 } from "./lib/trae-keepalive.js";
 import { TraeFakeLogoutManager } from "./lib/trae-fake-logout.js";
 import {
+  readAuthFromSnapshot,
   refreshAccountKeepalive,
   refreshAccountInsights,
   refreshAuthSnapshot,
@@ -337,6 +340,27 @@ function probeRunPayload(run) {
 }
 
 /**
+ * Probes through the Windows system proxy without saving or changing anything.
+ *
+ * Only reached when the candidate configuration resolved to no proxy at all and
+ * the direct probe failed. Since the default mode is `off`, an intranet user
+ * would otherwise be told "unreachable" with no way to learn that a working
+ * proxy is already configured in Windows — so the probe looks on their behalf
+ * and the panel can name the one setting that fixes it.
+ *
+ * On a machine with no system proxy this returns null without spawning a child,
+ * which keeps the ordinary case as cheap as it was.
+ */
+async function probeSystemProxySuggestion(hosts, baseEnv) {
+  const systemRead = await readWindowsSystemProxy();
+  const resolved = buildProxyVars({ mode: "system", url: null, noProxy: "" }, systemRead);
+  if (!resolved.vars) return null;
+  return probeRunPayload(
+    await probeHostsInChild(hosts, proxyChildEnv({ proxyVars: resolved.vars, env: baseEnv })),
+  );
+}
+
+/**
  * Probes the required hosts twice: forced direct, then through the candidate
  * configuration. This is what lets the panel answer "是否需要代理" with evidence
  * instead of a guess, and it also works for a candidate that has not been saved.
@@ -362,22 +386,22 @@ async function testProxyConfiguration(body) {
         await probeHostsInChild(hosts, proxyChildEnv({ proxyVars: resolved.vars, env: baseEnv })),
       )
     : null;
+  const suggestion =
+    direct.reachable || proxied?.reachable
+      ? null
+      : await probeSystemProxySuggestion(hosts, baseEnv);
 
-  const conclusion = direct.reachable ? "direct" : proxied?.reachable ? "proxy" : "none";
-  const conclusionText =
-    conclusion === "direct"
-      ? "直连可达，不需要代理。"
-      : conclusion === "proxy"
-        ? "直连失败，但走这个代理可达 —— 可以保存这个配置。"
-        : "直连和代理都不可达，请核对代理地址，或把下面的探测详情发给排查方。";
+  const verdict = describeProbeVerdict({ direct, proxied, suggestion });
 
   return {
     hosts,
     direct,
     proxied,
+    suggestion,
     state: describeProxyState(candidate, resolved, systemRead),
-    conclusion,
-    conclusionText,
+    conclusion: verdict.conclusion,
+    conclusionText: verdict.text,
+    severity: verdict.severity,
   };
 }
 
@@ -771,10 +795,13 @@ async function keepaliveOneAccount(account, { reason = "scheduled" } = {}) {
       await accountStore.saveInsights(account.id, refreshed.insights);
     }
     const warning = refreshed.insightsError || refreshed.insights?.error || null;
+    const auth = refreshed.auth || {};
     const saved = await accountStore.saveKeepalive(account.id, {
       status: "ok",
       reason,
-      tokenRefreshed: true,
+      tokenRefreshed: refreshed.refreshedToken,
+      accessExpiresAt: auth.expiredAt || null,
+      refreshExpiresAt: auth.refreshExpiredAt || null,
       insightsUpdated: !!refreshed.insights,
       warning,
       error: null,
@@ -784,7 +811,7 @@ async function keepaliveOneAccount(account, { reason = "scheduled" } = {}) {
       id: account.id,
       ok: true,
       skipped: false,
-      refreshedToken: true,
+      refreshedToken: refreshed.refreshedToken,
       insightsUpdated: !!refreshed.insights,
       warning,
       account: saved,
@@ -821,11 +848,20 @@ async function keepaliveActiveAccount(
       warning = error.message || String(error);
     }
     if (insights) await accountStore.saveInsights(account.id, insights);
+    // Display-only metadata: never let it turn a healthy sweep into an error.
+    let auth = {};
+    try {
+      auth = readAuthFromSnapshot(snapshot) || {};
+    } catch {
+      auth = {};
+    }
     const saved = await accountStore.saveKeepalive(account.id, {
       status: "ok",
       reason,
       tokenRefreshed: false,
       syncedFromLive: true,
+      accessExpiresAt: auth.expiredAt || null,
+      refreshExpiresAt: auth.refreshExpiredAt || null,
       insightsUpdated: !!insights,
       warning,
       error: null,
@@ -1566,6 +1602,14 @@ function installLogging() {
 async function main() {
   await fs.mkdir(DATA_DIR, { recursive: true });
   installLogging();
+
+  // Before the first request, because it only affects connections opened after
+  // the call. On an intranet whose proxy decrypts TLS this is the difference
+  // between working and failing every call with a certificate error — see
+  // system-ca.js, which widens the trusted roots to the same set Chromium (and
+  // therefore TRAE) already uses, and does not disable verification.
+  console.log(`[net] ${formatCAStatus(enableSystemCACertificates())}`);
+
   const purgedTransactionDirectory = await purgeLegacyTransactionDirectory(
     LEGACY_TRANSACTION_DIR,
   );

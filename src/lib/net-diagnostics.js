@@ -239,3 +239,105 @@ export function formatProbeLine(result) {
 export function probeSucceeded(result) {
   return Boolean(result) && result.error === null && Number.isInteger(result.httpStatus);
 }
+
+/* -------------------------------------------------------------------------- *
+ * Failure classification
+ *
+ * A probe that only ever says "unreachable" cannot tell an intranet user what to
+ * do next, and a wrong hint is worse than none: a certificate rejection used to
+ * be reported as "check the proxy address", sending people to re-check a value
+ * that was already correct. These helpers name the reason so the verdict can
+ * name the fix.
+ * -------------------------------------------------------------------------- */
+
+/** TLS failures that mean the chain was rejected, not that nothing answered. */
+const CERTIFICATE_FAILURES = [
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "UNABLE_TO_GET_ISSUER_CERT",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "CERT_HAS_EXPIRED",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+];
+
+/** Most specific first: a certificate rejection proves something answered. */
+const FAILURE_PRIORITY = ["certificate", "auth", "refused", "dns", "timeout", "other"];
+
+/**
+ * One keyword for a formatted error chain, or null when there is nothing to
+ * explain. `text` is `describeErrorChain` output, not a raw Error.
+ */
+export function classifyProbeFailure(text) {
+  if (typeof text !== "string" || !text) return null;
+  const upper = text.toUpperCase();
+  if (CERTIFICATE_FAILURES.some((code) => upper.includes(code))) return "certificate";
+  if (upper.includes("407") || upper.includes("PROXY AUTHENTICATION REQUIRED")) return "auth";
+  if (upper.includes("ECONNREFUSED")) return "refused";
+  if (upper.includes("ENOTFOUND") || upper.includes("EAI_AGAIN")) return "dns";
+  if (upper.includes("TIMEOUT") || upper.includes("ETIMEDOUT")) return "timeout";
+  return "other";
+}
+
+/** The most informative failure across every host of one probe run. */
+export function summarizeProbeFailure(results) {
+  const seen = new Set();
+  for (const result of results ?? []) {
+    const kind = classifyProbeFailure(result?.error);
+    if (kind) seen.add(kind);
+  }
+  return FAILURE_PRIORITY.find((kind) => seen.has(kind)) ?? null;
+}
+
+/**
+ * Turns the probe runs into one conclusion a non-technical user can act on.
+ *
+ * `severity` exists so the panel never has to infer "is this bad?" from the
+ * conclusion string: `ok` needs no action, `hint` is a fix the user can apply
+ * themselves, `error` needs the details sent on.
+ *
+ * `suggestion` is a third run through the Windows system proxy, made only when
+ * the configured mode resolved to nothing. Without it, an intranet user whose
+ * saved mode is `off` would be told "unreachable" and left to guess that the
+ * answer is a proxy they cannot see from inside the panel.
+ */
+export function describeProbeVerdict({ direct, proxied, suggestion } = {}) {
+  if (direct?.reachable) {
+    return { conclusion: "direct", severity: "ok", text: "直连可以正常访问，网络没问题。" };
+  }
+  if (proxied?.reachable) {
+    return {
+      conclusion: "proxy",
+      severity: "ok",
+      text: "直连不通，但走这个代理可以访问 —— 保存这个配置就可以了。",
+    };
+  }
+  if (suggestion?.reachable) {
+    return {
+      conclusion: "system-proxy",
+      severity: "hint",
+      text: "直连不通；本机 Windows 上配置的代理可以正常访问。把上面的代理模式改成「跟随系统代理」再保存就可以了。",
+    };
+  }
+
+  // Nothing worked. Name the reason instead of blaming the one field that was
+  // already right.
+  const throughProxy = Array.isArray(proxied?.results) && proxied.results.length > 0;
+  const kind = summarizeProbeFailure(throughProxy ? proxied.results : direct?.results);
+  const reasons = {
+    certificate: throughProxy
+      ? "代理已经连上，但本机不信任对方使用的证书。助手默认会信任 Windows 证书存储里的证书，仍报这个错说明那张根证书没有装进系统。请把下面的详情发给排查方。"
+      : "连接在证书校验这一步失败，说明本机不信任对方使用的证书。请把下面的详情发给排查方。",
+    auth: "代理要求输入账号密码（407），当前版本不支持填写代理账号密码。请让内网代理放行本机的 IP 地址，或把详情发给排查方。",
+    refused: "代理拒绝了连接，代理地址或端口可能填错了。请核对代理地址。",
+    dns: "域名解析失败，请检查本机的 DNS 设置。",
+    timeout:
+      "连接超时。如果本机在公司内网，通常是因为需要走代理 —— 把上面的代理模式改成「跟随系统代理」再试一次。",
+    other: "连接不上，请把下面的详情发给排查方。",
+  };
+  return {
+    conclusion: kind ?? "none",
+    severity: "error",
+    text: reasons[kind ?? "other"],
+  };
+}

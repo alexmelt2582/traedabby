@@ -600,6 +600,22 @@
       color: #ef4444;
     }
 
+    #${ROOT_ID} .te-keepalive-state.warning {
+      color: #f59e0b;
+    }
+
+    #${ROOT_ID} .te-transfer-note {
+      margin: 0 0 12px;
+      padding: 10px 12px;
+      border: 1px solid var(--te-border);
+      border-left: 3px solid var(--te-accent);
+      border-radius: 6px;
+      background: var(--te-surface);
+      color: var(--te-muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
     #${ROOT_ID} .te-checkin-state.pending {
       color: var(--te-muted);
     }
@@ -1043,31 +1059,31 @@
       <div class="te-feature-list">
         <div class="te-feature">
           <span class="te-feature-icon">1</span>
-          <span><span class="te-feature-title">多账号管理</span><span class="te-feature-desc">自动备份、独立保存并一键切换账号。</span></span>
+          <span><span class="te-feature-title">多账号管理</span><span class="te-feature-desc">每个账号单独保存一份，在「账号」页点账号卡片就能切换。切换前会自动备份当前账号，中途失败会自动恢复。</span></span>
         </div>
         <div class="te-feature">
           <span class="te-feature-icon">2</span>
-          <span><span class="te-feature-title">两种登录方式</span><span class="te-feature-desc">支持无感 OAuth 和传统假退出登录。</span></span>
+          <span><span class="te-feature-title">两种登录方式</span><span class="te-feature-desc">在「账号」页点「登录」后选择。「假退出」先备份当前账号再退回登录页，登录完成新账号自动进列表；「无感登录」不退出 TRAE，在浏览器里完成授权即可。</span></span>
         </div>
         <div class="te-feature">
           <span class="te-feature-icon">3</span>
-          <span><span class="te-feature-title">账号总览</span><span class="te-feature-desc">集中查看手机号、套餐和剩余额度。</span></span>
+          <span><span class="te-feature-title">账号总览</span><span class="te-feature-desc">手机号、套餐、剩余额度和有效期都显示在账号卡片上。不在使用的账号每 6 小时自动检查一次；想立刻更新，点工具栏上的刷新按钮。</span></span>
         </div>
         <div class="te-feature">
           <span class="te-feature-icon">4</span>
-          <span><span class="te-feature-title">加密导入导出</span><span class="te-feature-desc">账号备份通过密码加密，本地安全迁移。</span></span>
+          <span><span class="te-feature-title">加密导入导出</span><span class="te-feature-desc">用「账号」页工具栏的导出、导入按钮把账号搬到别的电脑，文件由你自己设置的密码加密。密码只在你手里，请记牢。</span></span>
         </div>
         <div class="te-feature">
           <span class="te-feature-icon">5</span>
-          <span><span class="te-feature-title">自动签到</span><span class="te-feature-desc te-feature-checkin">为全部账号自动领取签到积分。</span></span>
+          <span><span class="te-feature-title">自动签到</span><span class="te-feature-desc te-feature-checkin">为所有账号领取每日签到额度。</span></span>
         </div>
         <div class="te-feature">
           <span class="te-feature-icon">6</span>
-          <span><span class="te-feature-title">自动保活</span><span class="te-feature-desc">为非当前账号定期刷新登录凭据和额度。</span></span>
+          <span><span class="te-feature-title">登录续期</span><span class="te-feature-desc">每 30 分钟检查一遍所有账号的登录信息。只在临近到期时才换新，平时原样使用，避免频繁换新把其他设备顶下线。</span></span>
         </div>
         <div class="te-feature">
           <span class="te-feature-icon">7</span>
-          <span><span class="te-feature-title">安全恢复</span><span class="te-feature-desc">切换或登录中断时自动恢复原账号。</span></span>
+          <span><span class="te-feature-title">安全恢复</span><span class="te-feature-desc">切换账号或登录中途出错时，自动恢复原来的账号，不会把你留在登录页。</span></span>
         </div>
       </div>
     </div>
@@ -1084,7 +1100,7 @@
           <span class="te-badge te-proxy-badge">未读取</span>
         </div>
         <div class="te-section-hint">
-          内网机器上「TRAE 能上网、助手却报错」，通常就是这里没配对：TRAE 跟随 Windows 系统代理，助手默认不跟随。
+          助手默认直接连网，普通网络不用改这里。如果本机在公司内网、必须经过代理才能上网，选「跟随系统代理」保存，再点「测试连接」确认能通。
         </div>
         <select class="te-select te-proxy-mode"></select>
         <div class="te-section-hint te-proxy-mode-desc"></div>
@@ -1138,7 +1154,7 @@
           <span class="te-badge te-checkin-badge">未读取</span>
         </div>
         <div class="te-section-hint">
-          跳过今日已签到的账号，只对未签到的领奖。使用各账号自己的凭据，不会切换你当前登录的账号。
+          跳过今日已签到的账号，只对未签到的领奖。使用各账号自己的登录信息，不会切换你当前登录的账号。
         </div>
         <label class="te-field">
           <span>自动签到</span>
@@ -1396,37 +1412,56 @@
     };
   }
 
-  function accountKeepaliveView(account, currentAccountId) {
+  const CREDENTIAL_URGENT_MS = 24 * 60 * 60 * 1000;
+  const CREDENTIAL_WARN_MS = 7 * 24 * 60 * 60 * 1000;
+
+  function formatExpiry(value) {
+    if (!value) return "";
+    const date = new Date(value);
+    const pad = (part) => String(part).padStart(2, "0");
+    return (
+      `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+      ` ${pad(date.getHours())}:${pad(date.getMinutes())}`
+    );
+  }
+
+  function accountCredentialView(account) {
     const keepalive = account.keepalive;
     if (keepalive?.status === "error") {
       return {
-        label: "失败",
+        label: "同步失败",
         state: "error",
-        title: keepalive.error || "账号保活失败",
+        title: keepalive.error || "账号同步失败",
       };
     }
-    if (account.id === currentAccountId) {
+    const expiresAt = new Date(keepalive?.accessExpiresAt || NaN).getTime();
+    if (!Number.isFinite(expiresAt)) {
       return {
-        label: "运行中",
-        state: "checked",
-        title: "当前账号由正在运行的 TRAE 会话维护",
+        label: "-",
+        state: "pending",
+        title: "尚未读到到期时间，下一轮同步会自动补齐",
       };
     }
-    if (keepalive?.updatedAt) {
-      const details = [`最近保活 ${formatTime(keepalive.updatedAt)}`];
-      if (keepalive.tokenRefreshed) details.push("登录凭据已刷新");
-      if (keepalive.warning) details.push("额度同步有警告");
+    const stamp = formatExpiry(keepalive.accessExpiresAt);
+    const remaining = expiresAt - Date.now();
+    if (remaining <= 0) {
       return {
-        label: "正常",
-        state: "checked",
-        title: details.join("，"),
+        label: `已过期 ${stamp}`,
+        state: "error",
+        title: "登录状态已过期，下一轮同步会自动续期",
       };
     }
-    return {
-      label: "待保活",
-      state: "pending",
-      title: "等待后台自动保活",
-    };
+    if (remaining < CREDENTIAL_URGENT_MS) {
+      return {
+        label: `即将过期 ${stamp}`,
+        state: "error",
+        title: "登录状态即将过期，下一轮同步会自动续期",
+      };
+    }
+    if (remaining < CREDENTIAL_WARN_MS) {
+      return { label: stamp, state: "warning", title: "" };
+    }
+    return { label: stamp, state: "checked", title: "" };
   }
 
   function accountCreditView(account) {
@@ -1558,15 +1593,15 @@
       checkinValue.textContent = checkinView.label;
       checkinValue.classList.add(checkinView.state);
       checkinValue.title = checkinView.title || "";
-      const keepaliveView = accountKeepaliveView(account, currentAccountId);
-      const keepalive = document.createElement("span");
-      keepalive.className = "te-meta-item";
-      keepalive.innerHTML = '<span class="te-meta-label">保活</span><span class="te-meta-value te-keepalive-state"></span>';
-      const keepaliveValue = keepalive.querySelector(".te-keepalive-state");
-      keepaliveValue.textContent = keepaliveView.label;
-      keepaliveValue.classList.add(keepaliveView.state);
-      keepaliveValue.title = keepaliveView.title || "";
-      meta.append(phone, plan, checkin, keepalive);
+      const credentialView = accountCredentialView(account);
+      const credential = document.createElement("span");
+      credential.className = "te-meta-item";
+      credential.innerHTML = '<span class="te-meta-label">有效期至</span><span class="te-meta-value te-keepalive-state"></span>';
+      const credentialValue = credential.querySelector(".te-keepalive-state");
+      credentialValue.textContent = credentialView.label;
+      credentialValue.classList.add(credentialView.state);
+      credentialValue.title = credentialView.title || "";
+      meta.append(phone, plan, checkin, credential);
 
       const credit = document.createElement("div");
       credit.className = "te-credit-block";
@@ -1816,14 +1851,14 @@
     settingsUi.status.textContent = "";
     appendStatusLine(
       settingsUi.status,
-      "解析结果",
-      active ? `生效，来源：${proxyModeLabel(state.source)}` : "未生效",
+      "当前状态",
+      active ? `正在使用：${proxyModeLabel(state.source)}` : "不使用代理，直接连网",
     );
     if (active && !live) {
       appendStatusLine(
         settingsUi.status,
-        "当前进程",
-        "本进程启动时还没有这个代理，重启后才会生效。",
+        "需要重启",
+        "改动还没生效，点下面的「立即重启」后开始使用。",
       );
     }
     for (const note of state.notes ?? []) {
@@ -1998,11 +2033,14 @@
     const target = aboutPane.querySelector(".te-feature-checkin");
     if (!target || !checkin) return;
     if (!checkin.auto) {
-      target.textContent = "已关闭（打开面板和「立即签到」仍可用）。";
+      target.textContent =
+        "自动领取已关闭。想手动领就点工具栏上的「立即签到」；打开这个面板时也会自动核对一次。";
       return;
     }
-    const every = `每 ${checkin.intervalMinutes} 分钟检查`;
-    target.textContent = checkin.onClientLoad ? `${every}，TRAE 重启后立即补签。` : `${every}。`;
+    const every = `每 ${checkin.intervalMinutes} 分钟检查一次，当天还没领的账号自动补领`;
+    target.textContent = checkin.onClientLoad
+      ? `${every}；TRAE 重启后也会立刻补一次。`
+      : `${every}。`;
   }
 
   /**
@@ -2077,6 +2115,15 @@
       lines.push("走配置代理：当前配置没有解析出可用代理，已跳过。");
       for (const note of result.state?.notes ?? []) lines.push(`  ${note}`);
     }
+    // Only present when nothing the user configured produced a proxy, so the
+    // report can name the setting that would work instead of leaving them to
+    // guess. Nothing here is saved.
+    if (result.suggestion) {
+      lines.push("");
+      lines.push("走系统代理（仅供参考，没有改动任何设置）：");
+      if (result.suggestion.error) lines.push(`  ${result.suggestion.error}`);
+      for (const line of result.suggestion.lines ?? []) lines.push(`  ${line}`);
+    }
     lines.push("", result.conclusionText ?? "");
     return lines.join("\n");
   }
@@ -2097,14 +2144,16 @@
     // The output sits behind the disclosure, so open it or the result is invisible.
     settingsUi.advanced.open = true;
     settingsUi.probe.hidden = false;
-    settingsUi.probe.textContent = "正在探测（直连 + 配置代理），大约需要几秒...";
+    settingsUi.probe.textContent = "正在探测（直连和代理各试一次），大约需要几秒...";
     try {
       const result = await api("/api/settings/network/test", {
         method: "POST",
         body: JSON.stringify({ proxy: form }),
       });
       settingsUi.probe.textContent = formatProbeReport(result);
-      showToast(result.conclusionText ?? "探测完成", result.conclusion === "none");
+      // `severity` is the daemon's own verdict on whether the user must act, so
+      // the toast no longer has to infer it from the conclusion string.
+      showToast(result.conclusionText ?? "探测完成", result.severity === "error");
     } catch (error) {
       settingsUi.probe.textContent = error.message || String(error);
       showToast(error.message || String(error), true);
@@ -2341,7 +2390,7 @@
       if (result.status === "pending") {
         setLoginStatus("请在浏览器中完成扫码或账号授权，完成后会自动加入账号列表。");
       } else if (result.status === "exchanging") {
-        setLoginStatus("授权已收到，正在交换登录凭据并保存账号...");
+        setLoginStatus("授权已收到，正在保存账号登录信息...");
       } else if (result.status === "complete") {
         setLoginStatus("账号已加入列表，当前登录账号不会被切换。");
         await refresh();
@@ -2543,6 +2592,13 @@
     return body;
   }
 
+  function createTransferNote(text) {
+    const note = document.createElement("div");
+    note.className = "te-transfer-note";
+    note.textContent = text;
+    return note;
+  }
+
   function createField(labelText, { type = "password", autocomplete = "new-password" } = {}) {
     const label = document.createElement("label");
     label.className = "te-field";
@@ -2582,6 +2638,11 @@
         title: "导出账号",
         confirmText: "导出",
       });
+      body.append(
+        createTransferNote(
+          "导出的是此刻的登录信息，不是可以两台设备共用的副本。导入到其他设备后，本机上的这些账号会被顶下线，需要重新登录才能恢复 —— 请当作搬迁，不要在两台设备上同时管理同一个账号。",
+        ),
+      );
       const selected = new Set(data.accounts.map((account) => account.id));
       const heading = document.createElement("div");
       heading.className = "te-transfer-select-head";
@@ -2678,7 +2739,13 @@
       fileName.className = "te-transfer-file";
       fileName.textContent = file.name;
       const password = createField("密码", { autocomplete: "current-password" });
-      body.append(fileName, password.label);
+      body.append(
+        createTransferNote(
+          "这是某台设备导出的登录信息。如果原设备仍在运行并自动续期，这里导入的登录会失效（401），需要重新登录 —— 搬迁完成后，请在原设备上停用这些账号。",
+        ),
+        fileName,
+        password.label,
+      );
       password.input.focus();
 
       transferSubmit = async () => {

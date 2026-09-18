@@ -75,6 +75,7 @@ import {
 import {
   STATIC_HOSTS,
   describeErrorChain,
+  describeProbeVerdict,
   formatProbeLine,
   probeHosts,
   probeSucceeded,
@@ -96,6 +97,7 @@ import {
   parseServiceArgs,
 } from "../src/lib/cli-args.js";
 import { writeTextAtomic, readTextFile, writeJsonAtomic } from "../src/lib/json-file.js";
+import { enableSystemCACertificates, formatCAStatus } from "../src/lib/system-ca.js";
 import { buildTrayConfig } from "../src/lib/tray-config.js";
 import { buildTrayIco } from "../src/lib/tray-icon.js";
 import {
@@ -674,9 +676,12 @@ function formatProxySection({ proxy, resolved, systemRead }) {
   return lines;
 }
 
-function formatNetworkReport({ hosts, direct, proxied, proxy, resolved, systemRead }) {
+function formatNetworkReport({ hosts, direct, proxied, suggestion, proxy, resolved, systemRead, verdict }) {
   const lines = [];
   lines.push(`配置文件        : ${configPath(DATA_DIR)}`);
+  // Reported because on an intranet it is the difference between working and
+  // failing: without it a TLS-decrypting proxy is rejected as an unknown issuer.
+  lines.push(`证书信任        : ${formatCAStatus(enableSystemCACertificates())}`);
   lines.push(...formatProxySection({ proxy, resolved, systemRead }));
   lines.push(`本进程代理生效  : ${proxyEnvEnabled() ? "是" : "否"}`);
   lines.push("");
@@ -695,15 +700,13 @@ function formatNetworkReport({ hosts, direct, proxied, proxy, resolved, systemRe
     lines.push("");
     lines.push("当前配置没有解析出可用代理，跳过代理模式探测。");
   }
-  lines.push("");
-  const directOk = direct.every(probeSucceeded);
-  if (directOk) {
-    lines.push("结论: 直连可达，网络不是问题。");
-  } else if (proxied?.length && proxied.every(probeSucceeded)) {
-    lines.push("结论: 直连失败但走代理可达 → 请执行 configure --proxy-mode system");
-  } else {
-    lines.push("结论: 直连与代理都失败，请把上面的错误码发给排查方。");
+  if (suggestion?.length) {
+    lines.push("");
+    lines.push("走系统代理探测（仅供参考，没有保存任何设置）:");
+    for (const result of suggestion) lines.push(`  ${formatProbeLine(result)}`);
   }
+  lines.push("");
+  lines.push(`结论: ${verdict?.text ?? "未知"}`);
   return lines.join("\n");
 }
 
@@ -724,6 +727,19 @@ async function commandNet(args = []) {
   let proxied = null;
   if (resolved.vars) proxied = await probeThroughProxy(hosts, resolved.vars);
 
+  const directRun = asProbeRun(direct);
+  const proxiedRun = asProbeRun(proxied);
+  // Only when nothing the user configured produced a proxy. With the default
+  // `off` mode an intranet machine would otherwise be told "unreachable" and
+  // never learn that Windows already holds a working proxy.
+  const suggestion =
+    directRun.reachable || proxiedRun?.reachable ? null : await probeSystemProxySuggestion(hosts);
+  const verdict = describeProbeVerdict({
+    direct: directRun,
+    proxied: proxiedRun,
+    suggestion: asProbeRun(suggestion),
+  });
+
   if (args.includes("--json")) {
     log(
       JSON.stringify(
@@ -732,8 +748,12 @@ async function commandNet(args = []) {
           proxy: describeProxyState(config.proxy, resolved, systemRead),
           proxyEnvEnabled: proxyEnvEnabled(),
           proxyEnv: proxyEnvReport(),
+          certificateTrust: enableSystemCACertificates(),
           direct,
           proxied,
+          suggestion,
+          conclusion: verdict.conclusion,
+          severity: verdict.severity,
         },
         null,
         2,
@@ -742,7 +762,39 @@ async function commandNet(args = []) {
     return;
   }
 
-  log(formatNetworkReport({ hosts, direct, proxied, proxy: config.proxy, resolved, systemRead }));
+  log(
+    formatNetworkReport({
+      hosts,
+      direct,
+      proxied,
+      suggestion,
+      proxy: config.proxy,
+      resolved,
+      systemRead,
+      verdict,
+    }),
+  );
+}
+
+/** Wraps a bare result array in the shape `describeProbeVerdict` expects. */
+function asProbeRun(results) {
+  if (!Array.isArray(results)) return null;
+  return { results, reachable: results.length > 0 && results.every(probeSucceeded) };
+}
+
+/**
+ * Probes through the Windows system proxy without saving or changing anything.
+ *
+ * Reached only when the configured mode resolved to no proxy and a direct
+ * connection failed, so the report can name the one setting that would work
+ * instead of leaving the user to guess. A machine with no system proxy returns
+ * null without spawning a child.
+ */
+async function probeSystemProxySuggestion(hosts) {
+  const systemRead = await readWindowsSystemProxy();
+  const resolved = buildProxyVars({ mode: "system", url: null, noProxy: "" }, systemRead);
+  if (!resolved.vars) return null;
+  return probeThroughProxy(hosts, resolved.vars);
 }
 
 /**
@@ -871,6 +923,13 @@ async function waitForEnter() {
  * `TraeEnhancer.exe`.
  */
 async function main() {
+  // Before any command that can reach the network. See system-ca.js: behind a
+  // proxy that decrypts TLS, every request fails without this while TRAE itself
+  // works, because Chromium reads the Windows certificate store and Node does
+  // not. This widens the trusted roots to that same set; it is not a
+  // verification bypass.
+  enableSystemCACertificates();
+
   const { hasCommand, command, rest } = parseServiceArgs(process.argv);
   const handler = COMMANDS[command];
 

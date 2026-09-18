@@ -54,19 +54,20 @@ export function normalizeUseEnvProxy(value) {
 /**
  * How the daemon reaches the network.
  *
- * - `system` — follow the Windows system proxy. The default, and the only mode
- *   that works on an intranet machine where TRAE itself already follows it.
- *   On a machine with no system proxy configured this resolves to nothing, so it
- *   behaves exactly like `off` and cannot break a direct connection.
+ * - `off`    — never use a proxy. The default, because most installations are
+ *   not on an intranet and must not have a network setting changed for them.
+ * - `system` — follow the Windows system proxy. This is what an intranet
+ *   machine needs, since TRAE itself follows it there. On a machine with no
+ *   system proxy configured this resolves to nothing, so it also behaves
+ *   exactly like `off` — the two only differ where a proxy actually exists.
  * - `manual` — one proxy URL supplied by the user.
  * - `env`    — read `HTTP_PROXY`/`HTTPS_PROXY` from the environment. Kept for
  *   compatibility with v1.0.0's boolean `useEnvProxy` flag.
- * - `off`    — never use a proxy.
  */
 export const PROXY_MODES = ["system", "manual", "env", "off"];
 
 export function normalizeProxyMode(value) {
-  if (value === null || value === undefined || value === "") return "system";
+  if (value === null || value === undefined || value === "") return "off";
   if (typeof value !== "string") {
     throw new Error(`config.proxy.mode must be a string, got ${JSON.stringify(value)}`);
   }
@@ -132,11 +133,13 @@ export function normalizeProxyNoProxy(value) {
 export function normalizeProxyConfig(raw, legacyUseEnvProxy) {
   if (raw === null || raw === undefined) {
     // v1.0.0 stored a single boolean. `true` meant "take the proxy from the
-    // environment", which is exactly the `env` mode.
+    // environment", which is exactly the `env` mode. A `false` value carries no
+    // information about an intranet, so it migrates to the current default
+    // rather than silently opting the machine into a proxy it never used.
     const legacy =
       legacyUseEnvProxy === undefined ? null : normalizeUseEnvProxy(legacyUseEnvProxy);
     return {
-      mode: legacy === true ? "env" : "system",
+      mode: legacy === true ? "env" : "off",
       url: null,
       noProxy: "",
     };
@@ -236,7 +239,7 @@ export function normalizeConfig(raw) {
   if (raw === null || raw === undefined) {
     return {
       traeExe: null,
-      proxy: { mode: "system", url: null, noProxy: "" },
+      proxy: { mode: "off", url: null, noProxy: "" },
       traeUpdate: { suppress: true, previousMode: null },
       checkin: { ...CHECKIN_DEFAULTS },
     };

@@ -31,9 +31,12 @@ every other setting stay untouched.
   share one machine-generated device id across accounts.
 - Check-in endpoints are served from `https://api.trae.cn`; do not substitute the
   account-specific `loginHost`.
-- Keep-alive may rotate credentials only for inactive accounts. The active account
-  must be synchronized from the running TRAE storage and must not have its refresh
-  token rotated directly from the backup.
+- Keep-alive may rotate credentials only for inactive accounts, and only on expiry:
+  exchange when the access token has under a day left, or the refresh token under a
+  month. A credential with days left must be used as-is, because exchanging it
+  invalidates every other device holding the same chain. The active account must be
+  synchronized from the running TRAE storage and must not have its refresh token
+  rotated directly from the backup.
 - Identifying the active account yields three states, not two: `matched` takes the
   sync path; `not-managed` (TRAE holds an account outside the saved list) is safe and
   rotates normally; `unknown` (the live identity cannot be read at all) must skip the
@@ -43,9 +46,8 @@ every other setting stay untouched.
 - Skip automatic check-in and keep-alive while Cockpit Tools is running. Both tools
   rotating the same refresh tokens can invalidate each other.
 - When the Cockpit Tools probe cannot decide (`unknown`), check-in still runs but
-  credential rotation is refused, and keep-alive is skipped. Check-in only rotates a
-  token when the current one is expired; keep-alive rotates unconditionally, so the
-  refusal is what removes the conflict.
+  credential rotation is refused, and keep-alive is skipped. Both paths now rotate only
+  on expiry, so the refusal is what removes the remaining overlap.
 - The injected panel is a pure view of `data/accounts/index.json`. It must never
   derive check-in state itself; the daemon pushes `trae-enhancer:accounts-updated`
   over CDP after every state change, and the panel re-reads on that event and on open.
@@ -109,8 +111,12 @@ every other setting stay untouched.
   list is still empty. Both happen once per connection and re-arm only on disconnect.
   The adoption is attempted once per process run; retrying on every reconnect could
   adopt an account the user removed by hand.
-- Keep-alive sweeps every 30 minutes. Inactive accounts refresh every six hours;
-  failures retry after 30 minutes.
+- Keep-alive sweeps every 30 minutes. An inactive account is processed every six hours
+  and retried 30 minutes after a failure; the credential is exchanged only on expiry,
+  so most sweeps just refresh insights.
+- The panel shows each account's credential expiry, derived from `keepalive.accessExpiresAt`
+  and `keepalive.refreshExpiresAt`. Those two fields are display metadata carried inside
+  the keep-alive payload — they add no index schema.
 - Keep-alive, check-in, account switching, login flows, and insight refresh must be
   mutually exclusive.
 - Restarting the daemon requires stopping the exact PID reported by `/api/health`.
@@ -205,10 +211,32 @@ every other setting stay untouched.
 - `NODE_USE_ENV_PROXY` is read by Node at start-up only. It must be injected into a
   child's spawn environment; setting `process.env` at runtime has no effect. It
   defaults to off so a machine that currently connects directly is not broken.
-- The proxy mode defaults to `system` (follow the Windows system proxy). This is safe
-  on a machine with no system proxy precisely because the resolution then yields
-  nothing and behaves like `off`; the invariant to preserve is that no proxy is ever
-  introduced on a machine that has none, not the literal default value.
+- The proxy mode defaults to `off` (connect directly): most installations are not on
+  an intranet, and no machine may have its network configuration changed on its
+  behalf. An intranet machine opts into `system` from the settings tab. `system` also
+  resolves to nothing where no proxy exists, so the two modes differ only where a
+  proxy actually does; the invariant to preserve is that no proxy is ever introduced
+  on a machine that has none.
+- Outbound processes call `enableSystemCACertificates()` (`src/lib/system-ca.js`)
+  before their first request. Node ignores the Windows certificate store, so behind a
+  proxy that decrypts TLS every call failed with `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`
+  while TRAE itself kept working, because Chromium reads that store. The fix widens
+  the default root set to Node's own roots plus the system store. It is a widening of
+  trust, never a verification bypass: `NODE_TLS_REJECT_UNAUTHORIZED` and
+  `rejectUnauthorized: false` are not acceptable substitutes, and
+  `test/system-ca.test.js` asserts neither ever appears.
+- The certificate fix uses the runtime API rather than the `--use-system-ca` flag: a
+  directly launched `TraeEnhancer.exe net` never inherits a spawn environment, and
+  that is precisely the machine that needs the fix.
+- `tls.getCACertificates("default")` cannot verify the merge. Measured on Node
+  22.22.2: the store holds 116 roots, node ships 144, the union is 203 after
+  de-duplication, and the default set reads back as 179 after installation — do not
+  write an assertion against that number.
+- When the configured mode resolves to no proxy and a direct probe fails, the probe
+  also tries the Windows system proxy without saving anything, so an intranet user
+  learns which setting to change. `describeProbeVerdict` classifies each failure —
+  certificate, 407, refused, DNS — because reporting a certificate rejection as
+  "check the proxy address" sends people to a field that was already correct.
 - A process that starts a *fresh* proxy resolution spawns its child with
   `stripProxyEnv`, never with the environment it inherited. Otherwise the inherited
   `NODE_USE_ENV_PROXY` and old proxy variables survive a change to "不使用代理".

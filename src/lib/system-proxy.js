@@ -236,10 +236,10 @@ export const PROXY_MODE_LABELS = {
 };
 
 export const PROXY_MODE_DESCRIPTIONS = {
-  system: "读取 Windows 的 Internet 设置。没有配置系统代理时等同于不使用代理。",
-  manual: "自行填写代理地址，适合只有 PAC 自动配置脚本或需要固定代理的机器。",
-  env: "读取 HTTP_PROXY / HTTPS_PROXY 环境变量，与 v1.0.0 的行为一致。",
-  off: "助手直接连接网络，不经过任何代理。",
+  off: "直接连网，不经过代理。普通网络用这个。",
+  system: "跟随 Windows 里配好的代理。公司内网通常选这个。",
+  manual: "自己填代理地址，适合系统里只配置了自动脚本（PAC），或者需要固定代理的情况。",
+  env: "读取系统环境变量里的代理设置（HTTP_PROXY / HTTPS_PROXY）。",
 };
 
 /** Human-readable explanation for every way a mode can resolve to nothing. */
@@ -268,7 +268,7 @@ export const PROXY_REASON_TEXT = {
  * "no proxy configured" and is what makes a network failure hard to explain.
  */
 export function buildProxyVars(proxy, systemRead, { env = process.env } = {}) {
-  const mode = proxy?.mode ?? "system";
+  const mode = proxy?.mode ?? "off";
 
   if (mode === "off") {
     return { source: "off", vars: null, reason: "off", notes: [PROXY_REASON_TEXT.off] };
@@ -366,7 +366,7 @@ export function buildProxyVars(proxy, systemRead, { env = process.env } = {}) {
  * and the proxy variables are only read when the daemon starts.
  */
 export async function resolveProxyVars(proxy, options = {}) {
-  const mode = proxy?.mode ?? "system";
+  const mode = proxy?.mode ?? "off";
   const systemRead = mode === "system" ? await readWindowsSystemProxy(options) : null;
   return buildProxyVars(proxy, systemRead, options);
 }
