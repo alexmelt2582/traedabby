@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { readJsonFile, stableHash, writeJsonAtomic } from "./json-file.js";
+import { readAuthFromSnapshot } from "./trae-refresh.js";
 import {
   extractAuthSnapshot,
   extractIdentityFromSnapshot,
@@ -35,6 +36,54 @@ function safeDisplayName(identity) {
   );
 }
 
+function credentialExpiryFromSnapshot(snapshot) {
+  try {
+    const auth = readAuthFromSnapshot(snapshot);
+    const accessExpiresAt = auth?.expiredAt || null;
+    const refreshExpiresAt = auth?.refreshExpiredAt || null;
+    if (!accessExpiresAt && !refreshExpiresAt) return null;
+    return { accessExpiresAt, refreshExpiresAt };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Adds display-only credential expiry metadata to a record.
+ *
+ * A newly saved snapshot already contains the expiry values, so there is no
+ * reason to wait for the first keep-alive sweep before the panel can show them.
+ * This intentionally leaves `keepalive.status` and `keepalive.updatedAt` alone:
+ * those belong to the sweep, and stamping a fresh timestamp here would postpone
+ * the real sweep by a full interval.
+ */
+function withCredentialExpiry(record, snapshot, { onlyMissing = false } = {}) {
+  const expiry = credentialExpiryFromSnapshot(snapshot);
+  if (!expiry) return record;
+  const next = { ...(record || {}) };
+  const keepalive = { ...(next.keepalive || {}) };
+  let changed = false;
+  if (
+    expiry.accessExpiresAt &&
+    (!onlyMissing || !keepalive.accessExpiresAt) &&
+    keepalive.accessExpiresAt !== expiry.accessExpiresAt
+  ) {
+    keepalive.accessExpiresAt = expiry.accessExpiresAt;
+    changed = true;
+  }
+  if (
+    expiry.refreshExpiresAt &&
+    (!onlyMissing || !keepalive.refreshExpiresAt) &&
+    keepalive.refreshExpiresAt !== expiry.refreshExpiresAt
+  ) {
+    keepalive.refreshExpiresAt = expiry.refreshExpiresAt;
+    changed = true;
+  }
+  if (!changed) return record;
+  next.keepalive = keepalive;
+  return next;
+}
+
 function publicAccount(record) {
   return {
     id: record.id,
@@ -61,7 +110,7 @@ function buildAccountRecord(identity, existing, snapshot, now) {
   if (!identityKey) {
     throw new Error("Imported TRAE account does not contain a stable identity");
   }
-  return {
+  return withCredentialExpiry({
     schemaVersion: 1,
     id: existing?.id || `acct_${stableHash(identityKey)}`,
     userId: identity.userId,
@@ -77,7 +126,7 @@ function buildAccountRecord(identity, existing, snapshot, now) {
     snapshotCapturedAt: Number.isFinite(Number(snapshot.capturedAt))
       ? Number(snapshot.capturedAt)
       : now,
-  };
+  }, snapshot);
 }
 
 export class AccountStore {
@@ -217,7 +266,7 @@ export class AccountStore {
     if (position < 0) throw new Error("Account backup was not found");
     const identity = cleanIdentity(extractIdentityFromSnapshot(snapshot));
     await writeJsonAtomic(this.snapshotPath(accountId), snapshot, { mode: 0o600 });
-    index.accounts[position] = {
+    index.accounts[position] = withCredentialExpiry({
       ...index.accounts[position],
       userId: identity.userId || index.accounts[position].userId,
       email: identity.email || index.accounts[position].email,
@@ -229,7 +278,7 @@ export class AccountStore {
       }),
       updatedAt: now,
       snapshotCapturedAt: snapshot.capturedAt,
-    };
+    }, snapshot);
     await writeJsonAtomic(this.indexPath, index, { mode: 0o600 });
     return publicAccount(index.accounts[position]);
   }
@@ -277,6 +326,69 @@ export class AccountStore {
     };
     await writeJsonAtomic(this.indexPath, index, { mode: 0o600 });
     return publicAccount(index.accounts[position]);
+  }
+
+  /**
+   * Copies the credential expiry across for display only.
+   *
+   * The panel's「有效期至」reads `keepalive.accessExpiresAt`, which only the sweep
+   * writes — and the sweep is skipped entirely while Cockpit Tools is running or
+   * while TRAE's signed-in account cannot be read. The same value is already
+   * sitting in the account snapshot, so this copies it across locally: no
+   * network, no credential, no rotation, and nothing about the sweep changes.
+   *
+   * `status` and `updatedAt` are deliberately left alone. Stamping a fresh
+   * `updatedAt` would make `isKeepaliveDue` believe the account had just been
+   * synced and postpone the real sweep by a full interval.
+   */
+  async mergeCredentialExpiry(accountId, { accessExpiresAt, refreshExpiresAt } = {}) {
+    const index = await this.readIndex();
+    const position = index.accounts.findIndex((record) => record.id === accountId);
+    if (position < 0) return null;
+    const keepalive = { ...(index.accounts[position].keepalive || {}) };
+    if (accessExpiresAt) keepalive.accessExpiresAt = accessExpiresAt;
+    if (refreshExpiresAt) keepalive.refreshExpiresAt = refreshExpiresAt;
+    index.accounts[position] = { ...index.accounts[position], keepalive };
+    await writeJsonAtomic(this.indexPath, index, { mode: 0o600 });
+    return publicAccount(index.accounts[position]);
+  }
+
+  /**
+   * Fills the panel's「有效期至」for every account whose snapshot already knows it.
+   *
+   * The value the sweep writes into the index is `auth.expiredAt` — the very field
+   * the saved snapshot carries — so this is the same datum moved to where the panel
+   * reads it, not a second source of truth. It opens no socket and touches no
+   * credential, which is why it may run even when the sweep itself has to be
+   * skipped: Cockpit Tools running, or TRAE's signed-in account being unreadable.
+   *
+   * Returns how many records gained a value.
+   */
+  async fillCredentialExpiryFromSnapshots() {
+    const index = await this.readIndex();
+    let filled = 0;
+    for (const record of index.accounts) {
+      // A failed sweep owns the panel's「同步失败」message; a date here would only
+      // hide that failure.
+      if (record.keepalive?.status === "error") continue;
+      const missingAccess = !record.keepalive?.accessExpiresAt;
+      const missingRefresh = !record.keepalive?.refreshExpiresAt;
+      if (!missingAccess && !missingRefresh) continue;
+      let snapshot = null;
+      try {
+        snapshot = await this.readSnapshot(record.id);
+      } catch {
+        continue;
+      }
+      const updatedRecord = withCredentialExpiry(record, snapshot, { onlyMissing: true });
+      if (updatedRecord === record) continue;
+      const updated = await this.mergeCredentialExpiry(record.id, {
+        accessExpiresAt: updatedRecord.keepalive?.accessExpiresAt,
+        refreshExpiresAt: updatedRecord.keepalive?.refreshExpiresAt,
+      });
+      if (updated) filled += 1;
+    }
+    return filled;
   }
 
   async exportSnapshots(accountIds = null) {

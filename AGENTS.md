@@ -37,6 +37,9 @@ every other setting stay untouched.
   invalidates every other device holding the same chain. The active account must be
   synchronized from the running TRAE storage and must not have its refresh token
   rotated directly from the backup.
+- Account switching uses the same expiry guard (`refreshAuthSnapshotIfNeeded`). It
+  must not exchange a target account merely because it is being selected; a later 401
+  is the explicit retry point that may rotate once.
 - Identifying the active account yields three states, not two: `matched` takes the
   sync path; `not-managed` (TRAE holds an account outside the saved list) is safe and
   rotates normally; `unknown` (the live identity cannot be read at all) must skip the
@@ -117,6 +120,16 @@ every other setting stay untouched.
 - The panel shows each account's credential expiry, derived from `keepalive.accessExpiresAt`
   and `keepalive.refreshExpiresAt`. Those two fields are display metadata carried inside
   the keep-alive payload — they add no index schema.
+- Those two fields are also filled from the account snapshot when the panel opens
+  (`AccountStore.fillCredentialExpiryFromSnapshots`), because the sweep that writes them
+  may be skipped entirely while Cockpit Tools runs or the live identity is unreadable.
+  The value is the same `auth.expiredAt` the sweep copies, and the fill touches neither
+  the network nor a credential. It must never write `status` or `updatedAt`: a fresh
+  timestamp there reads as a finished sync and postpones the real sweep by a full interval.
+- A validated account snapshot also writes both expiry fields into the index at save
+  time, so a newly added account is visible in the panel immediately instead of waiting
+  for the first sweep or the next panel open. This still leaves `status` and `updatedAt`
+  untouched and does not rotate credentials.
 - Keep-alive, check-in, account switching, login flows, and insight refresh must be
   mutually exclusive.
 - Restarting the daemon requires stopping the exact PID reported by `/api/health`.

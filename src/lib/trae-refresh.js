@@ -45,6 +45,31 @@ export function readAuthFromSnapshot(snapshot) {
   return authKey ? parseIcubesValue(snapshot.keys[authKey]) : null;
 }
 
+/**
+ * Rotates credentials only when the saved expiry says they need it.
+ *
+ * Switching accounts used to exchange unconditionally, which invalidated every
+ * other device holding the same refresh-token chain. Reusing a credential with
+ * days left is safe and is the whole point of the expiry policy; a 401 later in
+ * the consuming path still triggers one explicit rotation.
+ */
+export async function refreshAuthSnapshotIfNeeded(snapshot, { now = Date.now() } = {}) {
+  const auth = readAuthFromSnapshot(snapshot);
+  if (!shouldRotateCredentials(auth, { now })) {
+    return {
+      snapshot,
+      auth,
+      profile: null,
+      refreshedToken: false,
+    };
+  }
+  const refreshed = await refreshAuthSnapshot(snapshot);
+  return {
+    ...refreshed,
+    refreshedToken: true,
+  };
+}
+
 function resolveHost(auth) {
   const raw = normalize(auth.loginHost) || normalize(auth.host) || "https://api.trae.cn";
   return /^https?:\/\//i.test(raw) ? raw.replace(/\/$/, "") : `https://${raw}`;
@@ -273,21 +298,8 @@ export async function refreshAuthSnapshot(snapshot) {
 }
 
 export async function refreshAccountKeepalive(snapshot, { now = Date.now() } = {}) {
-  let current = snapshot;
-  let auth = readAuthFromSnapshot(current);
-  let profile = null;
-  let refreshedToken = false;
-
-  // Rotation is expiry-driven: an access token with days left is good enough to
-  // read insights with, and exchanging it would invalidate every other device
-  // holding the same credential chain.
-  if (shouldRotateCredentials(auth, { now })) {
-    const rotated = await refreshAuthSnapshot(current);
-    current = rotated.snapshot;
-    auth = rotated.auth;
-    profile = rotated.profile;
-    refreshedToken = true;
-  }
+  let { snapshot: current, auth, profile, refreshedToken } =
+    await refreshAuthSnapshotIfNeeded(snapshot, { now });
 
   let insights = null;
   let insightsError = null;

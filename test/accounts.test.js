@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { AccountStore } from "../src/lib/accounts.js";
+import { isKeepaliveDue } from "../src/lib/trae-keepalive.js";
 import { traeStorageKeys } from "../src/lib/trae-storage.js";
 
 async function tempDir() {
@@ -24,6 +25,26 @@ function storageFixture() {
       entitlement_base_info: { user_id: "1026288307407252" },
     }),
   };
+}
+
+/**
+ * Creates one account through the real backup path, then records the keep-alive
+ * state the sweep would have left behind. The auth record is plain JSON, which is
+ * also what `readAuthFromSnapshot` reads back out of a stored snapshot.
+ */
+async function seedAccount(store, { auth, keepalive = null, userId = "1026288307407252" }) {
+  const email = `${userId}@example.com`;
+  const root = {
+    ...storageFixture(),
+    "iCubeAuthInfo://icube.cloudide": JSON.stringify(auth),
+    "iCubeServerData://icube.cloudide": JSON.stringify({ account: { userId, email } }),
+    "iCubeEntitlementInfo://icube.cloudide": JSON.stringify({
+      entitlement_base_info: { user_id: userId },
+    }),
+  };
+  const saved = await store.backupCurrent(root, { now: 100 });
+  if (keepalive) await store.saveKeepalive(saved.account.id, keepalive);
+  return saved.account.id;
 }
 
 test("backup stores the auth snapshot separately from the public index", async () => {
@@ -250,6 +271,126 @@ test("an account outside the saved list is not-managed rather than unknown", asy
       id: null,
       state: "not-managed",
     });
+  } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("a new account exposes its credential expiry as soon as it is saved", async () => {
+  const dataDir = await tempDir();
+  try {
+    const store = new AccountStore(dataDir);
+    const saved = await store.backupCurrent(
+      {
+        ...storageFixture(),
+        "iCubeAuthInfo://icube.cloudide": JSON.stringify({
+          accessToken: "token",
+          expiredAt: "2026-09-28T13:58:26.609Z",
+          refreshExpiredAt: "2026-10-08T13:58:26.609Z",
+        }),
+      },
+      { now: 100 },
+    );
+
+    const [account] = await store.list();
+    assert.equal(account.id, saved.account.id);
+    assert.equal(account.keepalive.accessExpiresAt, "2026-09-28T13:58:26.609Z");
+    assert.equal(account.keepalive.refreshExpiresAt, "2026-10-08T13:58:26.609Z");
+    // Expiry is display metadata, not a completed sweep.
+    assert.equal(account.keepalive.status, undefined);
+    assert.equal(account.keepalive.updatedAt, undefined);
+    assert.equal(
+      isKeepaliveDue({ keepalive: account.keepalive }, { now: Date.now() }),
+      true,
+    );
+  } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("the credential expiry is filled from the snapshot the sweep would read", async () => {
+  const dataDir = await tempDir();
+  try {
+    const store = new AccountStore(dataDir);
+    const syncedAt = "2026-09-01T00:00:00.000Z";
+    await seedAccount(store, {
+      keepalive: { status: "ok", reason: "scheduled", updatedAt: syncedAt },
+      auth: {
+        accessToken: "token",
+        expiredAt: "2026-09-28T13:58:26.609Z",
+        refreshExpiredAt: "2026-10-08T13:58:26.609Z",
+      },
+    });
+
+    assert.equal(await store.fillCredentialExpiryFromSnapshots(), 1);
+    const [account] = await store.list();
+    assert.equal(account.keepalive.accessExpiresAt, "2026-09-28T13:58:26.609Z");
+    assert.equal(account.keepalive.refreshExpiresAt, "2026-10-08T13:58:26.609Z");
+
+    // `status` and `updatedAt` still belong to the sweep. Stamping a fresh
+    // timestamp here would read as a just-finished sync and postpone the real
+    // one by a whole interval.
+    assert.equal(account.keepalive.status, "ok");
+    assert.equal(account.keepalive.updatedAt, syncedAt);
+    assert.equal(
+      isKeepaliveDue({ keepalive: account.keepalive }, { now: Date.now() }),
+      true,
+    );
+
+    // A second open changes nothing and does not double-count.
+    assert.equal(await store.fillCredentialExpiryFromSnapshots(), 0);
+  } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("the credential expiry fill leaves every state the sweep owns alone", async () => {
+  const dataDir = await tempDir();
+  try {
+    const store = new AccountStore(dataDir);
+    const known = "2026-09-20T00:00:00.000Z";
+    const failure = { status: "error", error: "refresh token is invalid", updatedAt: known };
+    await seedAccount(store, {
+      userId: "1000000000000001",
+      keepalive: failure,
+      auth: { accessToken: "token", expiredAt: "2026-09-28T13:58:26.609Z" },
+    });
+    await seedAccount(store, {
+      userId: "1000000000000002",
+      keepalive: { status: "ok", accessExpiresAt: known, updatedAt: known },
+      auth: { accessToken: "token", expiredAt: "2026-09-28T13:58:26.609Z" },
+    });
+    await seedAccount(store, {
+      userId: "1000000000000003",
+      auth: { accessToken: "token-without-an-expiry" },
+    });
+    const brokenId = await seedAccount(store, {
+      userId: "1000000000000004",
+      auth: { accessToken: "token", expiredAt: "2026-09-28T13:58:26.609Z" },
+    });
+
+    // A snapshot whose auth record cannot be decoded must not abort the whole fill.
+    const snapshotPath = store.snapshotPath(brokenId);
+    const broken = JSON.parse(await fs.readFile(snapshotPath, "utf8"));
+    broken.keys[`${traeStorageKeys.AUTH_PREFIX}icube.cloudide`] = "not-a-decodable-auth-record";
+    await fs.writeFile(snapshotPath, JSON.stringify(broken));
+
+    // Nothing is missing for the legacy fill to copy here: the failure and
+    // existing value are owned by the sweep, one has no expiry, and the broken
+    // snapshot already got its expiry from the backup that created it.
+    assert.equal(await store.fillCredentialExpiryFromSnapshots(), 0);
+    const byId = new Map((await store.list()).map((account) => [account.id, account]));
+    const byUser = new Map([...byId.values()].map((account) => [account.userId, account]));
+    const failed = byUser.get("1000000000000001");
+    assert.equal(failed.keepalive.accessExpiresAt, undefined);
+    assert.deepEqual(failed.keepalive, failure);
+    assert.equal(byId.size, 4);
+    assert.equal(byUser.get("1000000000000002").keepalive.accessExpiresAt, known);
+    assert.equal(byUser.get("1000000000000003").keepalive, null);
+    assert.equal(
+      byUser.get("1000000000000004").keepalive.accessExpiresAt,
+      "2026-09-28T13:58:26.609Z",
+    );
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }

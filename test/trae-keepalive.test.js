@@ -11,6 +11,7 @@ import {
   shouldRotateCredentials,
   toMillis,
 } from "../src/lib/trae-keepalive.js";
+import { refreshAuthSnapshotIfNeeded } from "../src/lib/trae-refresh.js";
 
 const NOW = Date.parse("2026-09-18T00:00:00.000Z");
 
@@ -150,4 +151,21 @@ test("missing expiry fields rotate conservatively", () => {
 test("a raw numeric expiresAt field is accepted as a fallback", () => {
   const expiresAt = Math.floor(Date.parse("2026-09-30T00:00:00.000Z") / 1000);
   assert.equal(shouldRotateCredentials({ expiresAt }, { now: NOW }), false);
+});
+
+test("a switch candidate with days left is reused instead of rotated", async () => {
+  const snapshot = {
+    keys: {
+      "iCubeAuthInfo://icube.cloudide": JSON.stringify({
+        accessToken: "token",
+        refreshToken: "refresh-token",
+        expiredAt: "2026-09-30T00:00:00.000Z",
+        refreshExpiredAt: "2027-03-15T00:00:00.000Z",
+      }),
+    },
+  };
+  const result = await refreshAuthSnapshotIfNeeded(snapshot, { now: NOW });
+  assert.equal(result.refreshedToken, false);
+  assert.equal(result.snapshot, snapshot);
+  assert.equal(result.auth.accessToken, "token");
 });

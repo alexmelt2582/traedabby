@@ -1436,27 +1436,21 @@
     }
     const expiresAt = new Date(keepalive?.accessExpiresAt || NaN).getTime();
     if (!Number.isFinite(expiresAt)) {
-      return {
-        label: "-",
-        state: "pending",
-        title: "尚未读到到期时间，下一轮同步会自动补齐",
-      };
+      // An unknown expiry is a bare dash, with no promise attached: the sweep that
+      // writes this field can be skipped, and opening the panel already fills it
+      // from the account's own snapshot.
+      return { label: "-", state: "pending", title: "" };
     }
     const stamp = formatExpiry(keepalive.accessExpiresAt);
     const remaining = expiresAt - Date.now();
+    // Past and imminent expiry are label-plus-colour only. No tooltip promises a
+    // refresh: the sweep that renews this can be skipped, so the promise can be
+    // false. This mirrors the reference panel, which never attaches one here.
     if (remaining <= 0) {
-      return {
-        label: `已过期 ${stamp}`,
-        state: "error",
-        title: "登录状态已过期，下一轮同步会自动续期",
-      };
+      return { label: `已过期 ${stamp}`, state: "error", title: "" };
     }
     if (remaining < CREDENTIAL_URGENT_MS) {
-      return {
-        label: `即将过期 ${stamp}`,
-        state: "error",
-        title: "登录状态即将过期，下一轮同步会自动续期",
-      };
+      return { label: `即将过期 ${stamp}`, state: "error", title: "" };
     }
     if (remaining < CREDENTIAL_WARN_MS) {
       return { label: stamp, state: "warning", title: "" };

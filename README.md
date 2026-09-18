@@ -14,7 +14,7 @@ The project provides:
 
 The account suite also supports:
 
-- one-click switching with a refresh-first, transactional restart flow and automatic
+- one-click switching with an expiry-checked, transactional restart flow and automatic
   rollback when TRAE rejects the selected account;
 - seamless login in the system browser without closing TRAE;
 - traditional fake logout that backs up the current account, keeps non-authentication

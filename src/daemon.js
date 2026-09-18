@@ -85,6 +85,7 @@ import {
   refreshAccountKeepalive,
   refreshAccountInsights,
   refreshAuthSnapshot,
+  refreshAuthSnapshotIfNeeded,
 } from "./lib/trae-refresh.js";
 import {
   findTraeProcessIds,
@@ -541,9 +542,9 @@ async function switchAccount(accountId) {
   );
 
   try {
-    const refreshed = await refreshAuthSnapshot(snapshot);
+    const refreshed = await refreshAuthSnapshotIfNeeded(snapshot);
     snapshot = refreshed.snapshot;
-    await accountStore.saveSnapshot(accountId, snapshot);
+    if (refreshed.refreshedToken) await accountStore.saveSnapshot(accountId, snapshot);
   } catch (error) {
     throw new Error(
       `目标账号登录凭据已失效，请重新登录该账号后再切换：${error.message || error}`,
@@ -1112,6 +1113,21 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
       jsonResponse(response, 200, { ok: true, busy: true });
       return;
     }
+
+    // Runs before the Cockpit guard on purpose: this touches neither the network
+    // nor a credential, so it stays available in exactly the situation that
+    // leaves the panel showing a bare「-」 — the sweep being skipped. The panel
+    // re-reads the list right after this call, so no push is needed.
+    await accountStore
+      .fillCredentialExpiryFromSnapshots()
+      .then((filled) => {
+        if (filled) {
+          console.log(`[keepalive] filled the credential expiry of ${filled} account(s)`);
+        }
+      })
+      .catch((error) => {
+        console.warn(`[keepalive] filling the credential expiry failed: ${error.message || error}`);
+      });
 
     const cockpit = await resolveCockpitPolicy();
     if (cockpit.action === "skip") {
