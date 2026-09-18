@@ -26,10 +26,12 @@ The account suite also supports:
   id, so one account does not consume another account's daily check-in slot.
 - the account signed in when TRAE first connects is adopted automatically, so a fresh
   install never opens on an empty list waiting for you to add one by hand.
-- automatic account keep-alive. Inactive accounts refresh their login credentials and
-  usage every six hours; the active account is synchronized from the running TRAE
-  session instead of rotating its refresh token. Keep-alive is skipped while Cockpit
-  Tools is running to avoid conflicting token rotations.
+- automatic account keep-alive. Every six hours each inactive account has its usage
+  re-read, and its credential is exchanged **only when it is about to expire** — the
+  access token with under a day left, or the refresh token under a month. The panel
+  shows that expiry instead of a vague "keep-alive" state. The active account is
+  synchronized from the running TRAE session instead of rotating its refresh token.
+  Keep-alive is skipped while Cockpit Tools is running to avoid conflicting rotations.
 
 Authentication backups are stored locally under `data/accounts`. Only account-scoped
 `iCube*` keys are replaced or cleared; workspaces, settings, extensions, and window
@@ -339,14 +341,21 @@ Two constraints shape the build and must not be broken:
 - Turning automatic check-in off stops those two runs only. Opening the panel still
   reconciles today's state, and the 「立即签到」 button still works: those are actions you
   take, not background runs.
-- Keep-alive sweeps every 30 minutes. Inactive accounts refresh credentials and
-  usage at most once every six hours; failures retry after 30 minutes.
+- Keep-alive sweeps every 30 minutes. Each inactive account is processed at most once
+  every six hours (30-minute retry after a failure) to refresh credits; the credential
+  itself is exchanged **only on expiry** — access token under a day left, refresh token
+  under a month. A credential with days left is used as-is, because exchanging it would
+  invalidate every other device holding the same chain.
 - The active account is synchronized from the running TRAE storage. Its refresh
   token is not rotated from the stored backup.
-- Rotating a refresh token can invalidate whoever still holds the old one, so a
-  rotation only happens once TRAE is known *not* to be signed in as a managed account.
-  If the live account cannot be read at all, the entire sweep is skipped and the
-  reason is logged, rather than rotating blind. TRAE holding an account outside the
+- Rotating a refresh token invalidates whoever still holds the old one — including a
+  copy you exported to another machine. Expiry-driven rotation makes that rare (roughly
+  every 11–14 days per account instead of four times a day) but cannot eliminate it:
+  two machines managing one account will always take turns kicking each other out. Treat
+  an export as a **migration**, not a shared copy.
+- A rotation additionally requires TRAE to be known *not* to be signed in as a managed
+  account. If the live account cannot be read at all, the entire sweep is skipped and
+  the reason is logged, rather than rotating blind. TRAE holding an account outside the
   saved list is fine and blocks nothing.
 - Automatic check-in and keep-alive are skipped while Cockpit Tools is running.
 - The Cockpit Tools test tries `tasklist` first and PowerShell second. If neither can

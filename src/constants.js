@@ -3,7 +3,7 @@ import path from "node:path";
 import { APP_ROOT } from "./lib/app-paths.js";
 
 export const APP_NAME = "TRAE SOLO CN Enhancer";
-export const APP_VERSION = "1.0.0";
+export const APP_VERSION = "1.0.1";
 export const PROJECT_ROOT = APP_ROOT;
 
 export const DEFAULT_CDP_PORT = 9334;

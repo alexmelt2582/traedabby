@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import { pickNumber, pickString, requestJson, safeRemoteError } from "./http.js";
+import { shouldRotateCredentials } from "./trae-keepalive.js";
 import { encryptIcubesValue, parseIcubesValue } from "./trae-crypto.js";
 import {
   fetchTraeAccountInsights,
@@ -27,6 +28,21 @@ function normalizeIsoTimestamp(value, fallback) {
     return new Date(milliseconds).toISOString();
   }
   return fallback;
+}
+
+function findAuthKey(snapshot) {
+  return Object.keys(snapshot.keys).find(
+    (key) =>
+      key.startsWith(traeStorageKeys.AUTH_PREFIX) &&
+      key !== traeStorageKeys.USERTAG_KEY &&
+      !key.startsWith(traeStorageKeys.DEVICE_PREFIX),
+  );
+}
+
+/** Reads the decoded auth record of a snapshot without mutating it. */
+export function readAuthFromSnapshot(snapshot) {
+  const authKey = findAuthKey(snapshot);
+  return authKey ? parseIcubesValue(snapshot.keys[authKey]) : null;
 }
 
 function resolveHost(auth) {
@@ -187,12 +203,7 @@ async function requestProfile(host, accessToken) {
 
 export async function refreshAuthSnapshot(snapshot) {
   const normalized = structuredClone(snapshot);
-  const authKey = Object.keys(normalized.keys).find(
-    (key) =>
-      key.startsWith(traeStorageKeys.AUTH_PREFIX) &&
-      key !== traeStorageKeys.USERTAG_KEY &&
-      !key.startsWith(traeStorageKeys.DEVICE_PREFIX),
-  );
+  const authKey = findAuthKey(normalized);
   if (!authKey) throw new Error("Snapshot does not contain a user auth key");
 
   const auth = parseIcubesValue(normalized.keys[authKey]);
@@ -261,22 +272,51 @@ export async function refreshAuthSnapshot(snapshot) {
   };
 }
 
-export async function refreshAccountKeepalive(snapshot) {
-  const refreshed = await refreshAuthSnapshot(snapshot);
+export async function refreshAccountKeepalive(snapshot, { now = Date.now() } = {}) {
+  let current = snapshot;
+  let auth = readAuthFromSnapshot(current);
+  let profile = null;
+  let refreshedToken = false;
+
+  // Rotation is expiry-driven: an access token with days left is good enough to
+  // read insights with, and exchanging it would invalidate every other device
+  // holding the same credential chain.
+  if (shouldRotateCredentials(auth, { now })) {
+    const rotated = await refreshAuthSnapshot(current);
+    current = rotated.snapshot;
+    auth = rotated.auth;
+    profile = rotated.profile;
+    refreshedToken = true;
+  }
+
   let insights = null;
   let insightsError = null;
   try {
-    insights = await fetchTraeAccountInsights(refreshed.snapshot);
+    insights = await fetchTraeAccountInsights(current);
   } catch (error) {
-    insightsError = error.message || String(error);
+    if (error instanceof TraeInsightsAuthError && !refreshedToken) {
+      const rotated = await refreshAuthSnapshot(current);
+      current = rotated.snapshot;
+      auth = rotated.auth;
+      profile = rotated.profile;
+      refreshedToken = true;
+      try {
+        insights = await fetchTraeAccountInsights(current);
+      } catch (retryError) {
+        insightsError = retryError.message || String(retryError);
+      }
+    } else {
+      insightsError = error.message || String(error);
+    }
   }
+
   return {
-    snapshot: refreshed.snapshot,
-    auth: refreshed.auth,
-    profile: refreshed.profile,
+    snapshot: current,
+    auth,
+    profile,
     insights,
     insightsError,
-    refreshedToken: true,
+    refreshedToken,
   };
 }
 
