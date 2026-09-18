@@ -935,6 +935,152 @@
       #${ROOT_ID} { right: 12px; bottom: 12px; }
       #${ROOT_ID} .te-panel { bottom: 50px; }
     }
+
+    /* Settings keep the existing panel skin, but use an internal index so the
+       controls are no longer one long stack. */
+    #${ROOT_ID} .te-pane[data-pane="settings"] {
+      overflow: hidden;
+      padding: 0;
+    }
+
+    #${ROOT_ID} .te-settings-shell {
+      display: grid;
+      grid-template-columns: 108px minmax(0, 1fr);
+      height: 100%;
+      min-height: 0;
+    }
+
+    #${ROOT_ID} .te-settings-nav {
+      display: grid;
+      align-content: start;
+      gap: 4px;
+      padding: 12px 8px;
+      border-right: 1px solid var(--te-border);
+      background: color-mix(in srgb, var(--te-surface) 72%, transparent);
+    }
+
+    #${ROOT_ID} .te-settings-nav-item {
+      min-height: 34px;
+      padding: 0 9px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      color: var(--te-muted);
+      background: transparent;
+      font: inherit;
+      font-size: 11px;
+      font-weight: 650;
+      text-align: left;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    #${ROOT_ID} .te-settings-nav-item.active {
+      border-color: var(--te-border);
+      color: var(--te-text);
+      background: var(--te-panel-solid);
+    }
+
+    #${ROOT_ID} .te-settings-panels {
+      min-width: 0;
+      overflow: auto;
+      padding: 12px;
+    }
+
+    #${ROOT_ID} .te-settings-panel { display: none; }
+    #${ROOT_ID} .te-settings-panel.active { display: grid; gap: 12px; }
+
+    #${ROOT_ID} .te-settings-panel-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    #${ROOT_ID} .te-settings-panel-head h2 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    #${ROOT_ID} .te-settings-panel-head p {
+      margin: 4px 0 0;
+      color: var(--te-muted);
+      font-size: 10.5px;
+      line-height: 1.5;
+    }
+
+    #${ROOT_ID} .te-settings-panel .te-section {
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+    }
+
+    #${ROOT_ID} .te-danger {
+      min-height: 32px;
+      padding: 0 11px;
+      border: 1px solid #ef4444;
+      border-radius: 8px;
+      color: #ffffff;
+      background: #ef4444;
+      font: inherit;
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    #${ROOT_ID} .te-danger:disabled { opacity: .5; }
+    #${ROOT_ID} .te-acc-delete:hover { color: #ef4444; }
+
+    /* About is now a short user guide, but keeps the original panel skin. */
+    #${ROOT_ID} .te-help { display: grid; gap: 16px; }
+    #${ROOT_ID} .te-help-intro { display: grid; gap: 6px; }
+    #${ROOT_ID} .te-help-kicker {
+      color: var(--te-accent);
+      font-size: 10px;
+      font-weight: 700;
+    }
+    #${ROOT_ID} .te-help h2, #${ROOT_ID} .te-help h3 { margin: 0; }
+    #${ROOT_ID} .te-help h2 { font-size: 20px; line-height: 1.2; }
+    #${ROOT_ID} .te-help-intro p,
+    #${ROOT_ID} .te-help-step p,
+    #${ROOT_ID} .te-help-note-wrap p,
+    #${ROOT_ID} .te-help-details p {
+      margin: 4px 0 0;
+      color: var(--te-muted);
+      font-size: 11px;
+      line-height: 1.6;
+    }
+    #${ROOT_ID} .te-help-steps { display: grid; gap: 0; }
+    #${ROOT_ID} .te-help-step {
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr);
+      gap: 9px;
+      padding: 11px 0;
+      border-top: 1px solid var(--te-border);
+    }
+    #${ROOT_ID} .te-help-step:last-child { border-bottom: 1px solid var(--te-border); }
+    #${ROOT_ID} .te-help-step-num { color: var(--te-accent); font-weight: 750; }
+    #${ROOT_ID} .te-help h3 { font-size: 12px; }
+    #${ROOT_ID} .te-help-note-wrap {
+      padding: 11px 12px;
+      border: 1px solid var(--te-border);
+      border-radius: 9px;
+      background: var(--te-surface);
+    }
+    #${ROOT_ID} .te-help-note-wrap strong { font-size: 12px; }
+    #${ROOT_ID} .te-help-details summary { color: var(--te-text); font-size: 12px; font-weight: 650; cursor: pointer; }
+    #${ROOT_ID} .te-help-version { color: var(--te-muted); font-size: 10px; }
+
+    @media (max-width: 420px) {
+      #${ROOT_ID} .te-settings-shell { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+      #${ROOT_ID} .te-settings-nav {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        border-right: 0;
+        border-bottom: 1px solid var(--te-border);
+        padding: 8px;
+      }
+      #${ROOT_ID} .te-settings-nav-item { padding: 0 4px; text-align: center; }
+    }
   `;
   document.head.appendChild(style);
 
@@ -1042,50 +1188,45 @@
   aboutPane.className = "te-pane";
   aboutPane.dataset.pane = "about";
   aboutPane.innerHTML = `
-    <div class="te-about">
-      <div class="te-about-hero">
-        <div class="te-about-icon">
-          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="4" y="7" width="16" height="12" rx="3"/>
-            <path d="M9 12h.01M15 12h.01M9 16h6M12 7V4M9 4h6"/>
-          </svg>
-        </div>
-        <div>
-          <div class="te-about-name">TRAE SOLO CN Enhancer</div>
-          <div class="te-about-summary">本地运行的多账号增强助手，通过 CDP 与本机 Trae 交互，不上传账号数据。</div>
-          <span class="te-about-version">v${APP_VERSION}</span>
-        </div>
+    <div class="te-help">
+      <header class="te-help-intro">
+        <span class="te-help-kicker">本地账号助手</span>
+        <h2>切换账号，不用反复扫码</h2>
+        <p>账号信息只保存在这台电脑。需要时切换，平时自动维护，不会把数据上传到别处。</p>
+      </header>
+      <div class="te-help-steps">
+        <article class="te-help-step">
+          <span class="te-help-step-num">1</span>
+          <div>
+            <h3>添加账号</h3>
+            <p>点「登录」，推荐选择「无感登录」。在浏览器完成授权后，账号会自动出现在列表里。</p>
+          </div>
+        </article>
+        <article class="te-help-step">
+          <span class="te-help-step-num">2</span>
+          <div>
+            <h3>切换账号</h3>
+            <p>点账号卡片右侧的切换按钮。TRAE 会短时间重启，原来的账号会自动备份，失败也会恢复。</p>
+          </div>
+        </article>
+        <article class="te-help-step">
+          <span class="te-help-step-num">3</span>
+          <div>
+            <h3>换电脑</h3>
+            <p>用导出、导入迁移账号。导出文件由你设置的密码加密，请把密码单独保存好。</p>
+          </div>
+        </article>
       </div>
-      <div class="te-feature-list">
-        <div class="te-feature">
-          <span class="te-feature-icon">1</span>
-          <span><span class="te-feature-title">多账号管理</span><span class="te-feature-desc">每个账号单独保存一份，在「账号」页点账号卡片就能切换。切换前会自动备份当前账号，中途失败会自动恢复。</span></span>
-        </div>
-        <div class="te-feature">
-          <span class="te-feature-icon">2</span>
-          <span><span class="te-feature-title">两种登录方式</span><span class="te-feature-desc">在「账号」页点「登录」后选择。「假退出」先备份当前账号再退回登录页，登录完成新账号自动进列表；「无感登录」不退出 TRAE，在浏览器里完成授权即可。</span></span>
-        </div>
-        <div class="te-feature">
-          <span class="te-feature-icon">3</span>
-          <span><span class="te-feature-title">账号总览</span><span class="te-feature-desc">手机号、套餐、剩余额度和有效期都显示在账号卡片上。不在使用的账号每 6 小时自动检查一次；想立刻更新，点工具栏上的刷新按钮。</span></span>
-        </div>
-        <div class="te-feature">
-          <span class="te-feature-icon">4</span>
-          <span><span class="te-feature-title">加密导入导出</span><span class="te-feature-desc">用「账号」页工具栏的导出、导入按钮把账号搬到别的电脑，文件由你自己设置的密码加密。密码只在你手里，请记牢。</span></span>
-        </div>
-        <div class="te-feature">
-          <span class="te-feature-icon">5</span>
-          <span><span class="te-feature-title">自动签到</span><span class="te-feature-desc te-feature-checkin">为所有账号领取每日签到额度。</span></span>
-        </div>
-        <div class="te-feature">
-          <span class="te-feature-icon">6</span>
-          <span><span class="te-feature-title">登录续期</span><span class="te-feature-desc">每 30 分钟检查一遍所有账号的登录信息。只在临近到期时才换新，平时原样使用，避免频繁换新把其他设备顶下线。</span></span>
-        </div>
-        <div class="te-feature">
-          <span class="te-feature-icon">7</span>
-          <span><span class="te-feature-title">安全恢复</span><span class="te-feature-desc">切换账号或登录中途出错时，自动恢复原来的账号，不会把你留在登录页。</span></span>
-        </div>
+      <div class="te-help-note-wrap">
+        <strong>自动维护</strong>
+        <p class="te-feature-checkin">每天自动核对签到状态，并在需要时更新账号信息。</p>
+        <p>只在登录信息临近到期时才更新，避免频繁操作影响其他设备。</p>
       </div>
+      <details class="te-help-details">
+        <summary>数据安全</summary>
+        <p>导出后的账号是一份搬迁副本，不是共享账号。原设备继续使用或更新登录信息后，另一台设备上的副本可能失效，需要重新登录。</p>
+      </details>
+      <footer class="te-help-version">TRAE SOLO CN Enhancer v${APP_VERSION}</footer>
     </div>
   `;
 
@@ -1093,100 +1234,59 @@
   settingsPane.className = "te-pane";
   settingsPane.dataset.pane = "settings";
   settingsPane.innerHTML = `
-    <div class="te-settings">
-      <div class="te-section">
-        <div class="te-section-title">
-          <span>网络代理</span>
-          <span class="te-badge te-proxy-badge">未读取</span>
-        </div>
-        <div class="te-section-hint">
-          助手默认直接连网，普通网络不用改这里。如果本机在公司内网、必须经过代理才能上网，选「跟随系统代理」保存，再点「测试连接」确认能通。
-        </div>
-        <select class="te-select te-proxy-mode"></select>
-        <div class="te-section-hint te-proxy-mode-desc"></div>
-        <label class="te-field te-proxy-url-field" hidden>
-          <span>代理地址</span>
-          <input class="te-proxy-url" type="text" spellcheck="false" placeholder="127.0.0.1:7890 或 http://127.0.0.1:7890">
-        </label>
-        <label class="te-field te-proxy-noproxy-field" hidden>
-          <span>附加直连地址（可选，逗号分隔）</span>
-          <input class="te-proxy-noproxy" type="text" spellcheck="false" placeholder="*.corp.example.com">
-        </label>
-        <div class="te-status-list te-proxy-status"></div>
-        <div class="te-section-actions">
-          <button class="te-secondary te-proxy-reload" type="button">重新读取</button>
-          <button class="te-secondary te-proxy-test" type="button">测试连接</button>
-          <button class="te-primary te-proxy-save" type="button">保存</button>
-        </div>
-        <div class="te-restart-banner te-proxy-restart">
-          <span>已保存，重启守护进程后才会生效。</span>
-          <button class="te-secondary te-daemon-restart" type="button">立即重启</button>
-        </div>
-        <details class="te-proxy-advanced">
-          <summary>高级信息与诊断</summary>
-          <div class="te-status-list te-proxy-detail"></div>
-          <div class="te-probe-output te-proxy-probe" hidden></div>
-        </details>
-      </div>
-      <div class="te-section">
-        <div class="te-section-title">
-          <span>TRAE 自动更新</span>
-          <span class="te-badge te-trae-badge">未读取</span>
-        </div>
-        <div class="te-section-hint">
-          TRAE 默认每 60 分钟检查一次更新，更新后必须重启 TRAE，正在使用的助手会中断。关闭检查不影响手动更新：仍然可以在 TRAE 的菜单里手动检查。
-        </div>
-        <select class="te-select te-trae-mode">
-          <option value="suppress">禁止自动更新（推荐）</option>
-          <option value="allow">允许自动更新</option>
-        </select>
-        <div class="te-status-list te-trae-status"></div>
-        <div class="te-section-actions">
-          <button class="te-primary te-trae-save" type="button">保存</button>
-        </div>
-        <div class="te-restart-banner te-trae-restart">
-          <span>已保存，重启 TRAE 后生效。</span>
-        </div>
-      </div>
-      <div class="te-section">
-        <div class="te-section-title">
-          <span>自动签到</span>
-          <span class="te-badge te-checkin-badge">未读取</span>
-        </div>
-        <div class="te-section-hint">
-          跳过今日已签到的账号，只对未签到的领奖。使用各账号自己的登录信息，不会切换你当前登录的账号。
-        </div>
-        <label class="te-field">
-          <span>自动签到</span>
-          <select class="te-select te-checkin-auto">
-            <option value="on">开启</option>
-            <option value="off">关闭</option>
-          </select>
-        </label>
-        <label class="te-field">
-          <span>检查间隔</span>
-          <select class="te-select te-checkin-interval"></select>
-        </label>
-        <label class="te-field">
-          <span>页面加载时补签</span>
-          <select class="te-select te-checkin-clientload">
-            <option value="on">开启</option>
-            <option value="off">关闭</option>
-          </select>
-        </label>
-        <div class="te-status-list te-checkin-status"></div>
-        <div class="te-section-actions">
-          <button class="te-primary te-checkin-save" type="button">保存</button>
-        </div>
-      </div>
-      <div class="te-section">
-        <div class="te-section-title">守护进程</div>
-        <div class="te-section-hint">
-          重启只会重启助手自己的后台服务，不影响 TRAE，也不会退出已登录的账号。面板通常几秒内自动恢复。
-        </div>
-        <div class="te-section-actions">
-          <button class="te-secondary te-daemon-restart" type="button">重启守护进程</button>
-        </div>
+    <div class="te-settings-shell">
+      <nav class="te-settings-nav" aria-label="设置分类">
+        <button class="te-settings-nav-item active" type="button" data-settings-section="checkin">签到</button>
+        <button class="te-settings-nav-item" type="button" data-settings-section="network">网络</button>
+        <button class="te-settings-nav-item" type="button" data-settings-section="update">更新</button>
+        <button class="te-settings-nav-item" type="button" data-settings-section="maintenance">维护</button>
+      </nav>
+      <div class="te-settings-panels">
+        <section class="te-settings-panel active" data-settings-panel="checkin">
+          <div class="te-settings-panel-head">
+            <div><h2>自动签到</h2><p>只给今天还没签到的账号补领，不会切换当前账号。</p></div>
+            <span class="te-badge te-checkin-badge">未读取</span>
+          </div>
+          <div class="te-section">
+            <label class="te-field"><span>自动签到</span><select class="te-select te-checkin-auto"><option value="on">开启</option><option value="off">关闭</option></select></label>
+            <label class="te-field"><span>检查间隔</span><select class="te-select te-checkin-interval"></select></label>
+            <label class="te-field"><span>页面加载时补签</span><select class="te-select te-checkin-clientload"><option value="on">开启</option><option value="off">关闭</option></select></label>
+            <div class="te-status-list te-checkin-status"></div>
+            <div class="te-section-actions"><button class="te-primary te-checkin-save" type="button">保存</button></div>
+          </div>
+        </section>
+        <section class="te-settings-panel" data-settings-panel="network">
+          <div class="te-settings-panel-head">
+            <div><h2>网络连接</h2><p>普通网络保持默认即可；公司内网无法联网时再改这里。</p></div>
+            <span class="te-badge te-proxy-badge">未读取</span>
+          </div>
+          <div class="te-section">
+            <select class="te-select te-proxy-mode"></select>
+            <div class="te-section-hint te-proxy-mode-desc"></div>
+            <label class="te-field te-proxy-url-field" hidden><span>代理地址</span><input class="te-proxy-url" type="text" spellcheck="false" placeholder="127.0.0.1:7890 或 http://127.0.0.1:7890"></label>
+            <label class="te-field te-proxy-noproxy-field" hidden><span>附加直连地址（可选，逗号分隔）</span><input class="te-proxy-noproxy" type="text" spellcheck="false" placeholder="*.corp.example.com"></label>
+            <div class="te-status-list te-proxy-status"></div>
+            <div class="te-section-actions"><button class="te-secondary te-proxy-reload" type="button">重新读取</button><button class="te-secondary te-proxy-test" type="button">测试连接</button><button class="te-primary te-proxy-save" type="button">保存</button></div>
+            <div class="te-restart-banner te-proxy-restart"><span>已保存，重启后台服务后才会生效。</span><button class="te-secondary te-daemon-restart" type="button">立即重启</button></div>
+            <details class="te-proxy-advanced"><summary>诊断信息</summary><div class="te-status-list te-proxy-detail"></div><div class="te-probe-output te-proxy-probe" hidden></div></details>
+          </div>
+        </section>
+        <section class="te-settings-panel" data-settings-panel="update">
+          <div class="te-settings-panel-head">
+            <div><h2>TRAE 更新</h2><p>关闭自动检查可以避免更新打断当前会话，手动更新仍然可用。</p></div>
+            <span class="te-badge te-trae-badge">未读取</span>
+          </div>
+          <div class="te-section">
+            <select class="te-select te-trae-mode"><option value="suppress">禁止自动更新（推荐）</option><option value="allow">允许自动更新</option></select>
+            <div class="te-status-list te-trae-status"></div>
+            <div class="te-section-actions"><button class="te-primary te-trae-save" type="button">保存</button></div>
+            <div class="te-restart-banner te-trae-restart"><span>已保存，重启 TRAE 后生效。</span></div>
+          </div>
+        </section>
+        <section class="te-settings-panel" data-settings-panel="maintenance">
+          <div class="te-settings-panel-head"><div><h2>后台服务</h2><p>遇到面板没有响应时，可以单独重启助手自己的后台服务。</p></div></div>
+          <div class="te-section"><div class="te-section-actions"><button class="te-secondary te-daemon-restart" type="button">重启后台服务</button></div></div>
+        </section>
       </div>
     </div>
   `;
@@ -1257,6 +1357,23 @@
     </div>
   `;
 
+  const deleteMask = document.createElement("div");
+  deleteMask.className = "te-modal-mask";
+  deleteMask.innerHTML = `
+    <div class="te-modal" role="dialog" aria-modal="true" aria-label="删除账号备份">
+      <div class="te-modal-title">删除账号备份</div>
+      <div class="te-modal-status te-delete-status"></div>
+      <label class="te-field">
+        <span>输入“删除”确认</span>
+        <input class="te-delete-confirm" type="text" autocomplete="off" spellcheck="false" placeholder="删除">
+      </label>
+      <div class="te-modal-actions">
+        <button class="te-secondary te-delete-cancel" type="button">取消</button>
+        <button class="te-danger te-delete-submit" type="button" disabled>删除</button>
+      </div>
+    </div>
+  `;
+
   const importFileInput = document.createElement("input");
   importFileInput.type = "file";
   importFileInput.accept = ".json,application/json";
@@ -1274,7 +1391,7 @@
     </svg>
   `;
 
-  root.append(panel, loginChoiceMask, oauthMask, transferMask, importFileInput, fab);
+  root.append(panel, loginChoiceMask, oauthMask, transferMask, deleteMask, importFileInput, fab);
   document.body.appendChild(root);
 
   let toastTimer = null;
@@ -1297,6 +1414,9 @@
   // Why the automatic adoption of the signed-in account failed, if it did. Kept
   // here so the empty state can say it instead of looking like "no accounts yet".
   let adoptionError = null;
+  let accountsById = new Map();
+  let deleteAccountId = null;
+  let deleteAccountName = "";
 
   function loginSessionSeen(sessionId) {
     if (!sessionId) return false;
@@ -1493,6 +1613,7 @@
 
   function renderAccounts(accounts, currentAccountId) {
     list.replaceChildren();
+    accountsById = new Map(accounts.map((account) => [account.id, account]));
     if (!accounts.length) {
       const empty = document.createElement("div");
       empty.className = "te-empty";
@@ -1548,6 +1669,7 @@
         action = document.createElement("span");
         action.className = "te-current";
         action.textContent = "当前";
+        ops.appendChild(action);
       } else {
         action = document.createElement("button");
         action.className = "te-icon-btn te-acc-switch";
@@ -1563,8 +1685,19 @@
             <path d="M4 17h12"/>
           </svg>
         `;
+        const remove = document.createElement("button");
+        remove.className = "te-icon-btn te-acc-delete";
+        remove.type = "button";
+        remove.title = "删除本地备份";
+        remove.setAttribute("aria-label", `删除 ${account.displayName || "该账号"} 的本地备份`);
+        remove.dataset.accountId = account.id;
+        remove.innerHTML = `
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/>
+          </svg>
+        `;
+        ops.append(action, remove);
       }
-      ops.appendChild(action);
       row.append(main, ops);
 
       const creditView = accountCreditView(account);
@@ -1695,6 +1828,18 @@
     // Read once, then keep whatever the user has typed: re-reading on every tab
     // switch would silently discard an edit in progress.
     if (activeTab === "settings" && !settingsLoaded) loadSettings().catch(() => {});
+  }
+
+  function switchSettingsSection(name) {
+    const target = ["checkin", "network", "update", "maintenance"].includes(name)
+      ? name
+      : "checkin";
+    settingsPane.querySelectorAll(".te-settings-nav-item").forEach((item) => {
+      item.classList.toggle("active", item.dataset.settingsSection === target);
+    });
+    settingsPane.querySelectorAll(".te-settings-panel").forEach((panel) => {
+      panel.classList.toggle("active", panel.dataset.settingsPanel === target);
+    });
   }
 
   function shouldRefreshInsights(accounts) {
@@ -2318,6 +2463,47 @@
     }
   }
 
+  function openDeleteDialog(account) {
+    deleteAccountId = account.id;
+    deleteAccountName = account.displayName || "该账号";
+    const status = deleteMask.querySelector(".te-delete-status");
+    status.textContent = `将删除「${deleteAccountName}」的本地备份。不会退出 TRAE 当前登录，也不能在助手内撤销。`;
+    const input = deleteMask.querySelector(".te-delete-confirm");
+    input.value = "";
+    deleteMask.querySelector(".te-delete-submit").disabled = true;
+    deleteMask.classList.add("open");
+    input.focus();
+  }
+
+  function closeDeleteDialog() {
+    deleteMask.classList.remove("open");
+    deleteAccountId = null;
+    deleteAccountName = "";
+    deleteMask.querySelector(".te-delete-confirm").value = "";
+    deleteMask.querySelector(".te-delete-submit").disabled = true;
+  }
+
+  async function confirmDeleteAccount() {
+    if (!deleteAccountId) return;
+    const submit = deleteMask.querySelector(".te-delete-submit");
+    const status = deleteMask.querySelector(".te-delete-status");
+    submit.disabled = true;
+    status.textContent = `正在删除「${deleteAccountName}」的本地备份...`;
+    try {
+      await api("/api/accounts/delete", {
+        method: "POST",
+        body: JSON.stringify({ accountId: deleteAccountId }),
+      });
+      const deletedName = deleteAccountName;
+      closeDeleteDialog();
+      showToast(`已删除「${deletedName}」的本地备份`);
+      await refresh();
+    } catch (error) {
+      status.textContent = error.message || String(error);
+      submit.disabled = false;
+    }
+  }
+
   function setLoginStatus(message, error = false) {
     const status = oauthMask.querySelector(".te-modal-status");
     status.textContent = message;
@@ -2837,6 +3023,9 @@
   tabs.querySelectorAll(".te-tab").forEach((tab) => {
     tab.addEventListener("click", () => switchTab(tab.dataset.tab));
   });
+  settingsPane.querySelectorAll(".te-settings-nav-item").forEach((item) => {
+    item.addEventListener("click", () => switchSettingsSection(item.dataset.settingsSection));
+  });
   settingsUi.mode.addEventListener("change", () => {
     applyProxyModeVisibility(settingsUi.mode.value);
   });
@@ -2867,9 +3056,28 @@
     });
   }
   list.addEventListener("click", (event) => {
+    const deleteButton = event.target.closest(".te-acc-delete");
+    if (deleteButton?.dataset.accountId) {
+      const account = accountsById.get(deleteButton.dataset.accountId);
+      if (account) openDeleteDialog(account);
+      return;
+    }
     const button = event.target.closest(".te-acc-switch");
     if (!button?.dataset.accountId) return;
     switchAccount(button, button.dataset.accountId).catch(() => {});
+  });
+  deleteMask.querySelector(".te-delete-confirm").addEventListener("input", (event) => {
+    deleteMask.querySelector(".te-delete-submit").disabled = event.target.value.trim() !== "删除";
+  });
+  deleteMask.querySelector(".te-delete-cancel").addEventListener("click", closeDeleteDialog);
+  deleteMask.querySelector(".te-delete-submit").addEventListener("click", () => {
+    confirmDeleteAccount().catch(() => {});
+  });
+  deleteMask.addEventListener("click", (event) => {
+    if (event.target === deleteMask) closeDeleteDialog();
+  });
+  deleteMask.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeDeleteDialog();
   });
   loginChoiceMask.querySelectorAll(".te-login-option").forEach((option) => {
     option.querySelector("input")?.addEventListener("change", () => {

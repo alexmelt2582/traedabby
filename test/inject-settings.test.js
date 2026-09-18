@@ -51,7 +51,8 @@ test("the settings tab exists next to the account and about tabs", () => {
   const tabs = paneTemplate("tabs");
   assert.ok(tabs.includes('data-tab="account"'));
   assert.ok(tabs.includes('data-tab="settings"'), "the settings tab button is missing");
-  assert.ok(tabs.includes('data-tab="about"'));
+  assert.ok(tabs.includes('data-tab="about"'), "the about tab button is missing");
+  assert.ok(tabs.includes("<span>关于</span>"), "the about tab label is missing");
   assert.ok(source.includes('settingsPane.dataset.pane = "settings"'));
 });
 

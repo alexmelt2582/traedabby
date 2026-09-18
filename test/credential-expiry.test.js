@@ -71,11 +71,12 @@ test("both transfer dialogs warn that an export is a migration", () => {
   assert.match(injectSource, /搬迁/);
 });
 
-test("the about list no longer advertises unconditional keep-alive", () => {
+test("the help page no longer advertises unconditional keep-alive", () => {
   assert.doesNotMatch(injectSource, /为非当前账号定期刷新登录凭据和额度/);
-  // The entry must keep saying a credential is only replaced near expiry.
-  // Advertising a periodic refresh is what gets other devices kicked offline.
-  assert.match(injectSource, /只在临近到期时才换新/);
+  // The copy must stay ordinary-user readable and still avoid promising a
+  // periodic refresh that would get other devices kicked offline.
+  assert.match(injectSource, /只在登录信息临近到期时才更新/);
+  assert.doesNotMatch(injectSource, /通过 CDP 与本机 Trae 交互/);
 });
 
 test("the panel avoids the internal vocabulary for credentials", () => {

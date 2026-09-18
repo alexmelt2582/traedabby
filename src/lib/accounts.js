@@ -503,6 +503,31 @@ export class AccountStore {
   }
 
   /**
+   * Removes one local account backup.
+   *
+   * The account index is the source of truth, so it is updated first. The
+   * snapshot directory is then removed by its validated account id. A failed
+   * directory removal can leave an orphan file behind, but it can never leave a
+   * list entry pointing at account data the user believes was deleted.
+   */
+  async deleteAccount(accountId) {
+    if (!/^acct_[a-f0-9]{24}$/.test(String(accountId || ""))) {
+      throw new Error("Invalid account id");
+    }
+    const index = await this.readIndex();
+    const position = index.accounts.findIndex((record) => record.id === accountId);
+    if (position < 0) return null;
+    const [record] = index.accounts.splice(position, 1);
+    await writeJsonAtomic(
+      this.indexPath,
+      { ...index, schemaVersion: 1, accounts: index.accounts },
+      { mode: 0o600 },
+    );
+    await fs.rm(path.join(this.accountsDir, accountId), { recursive: true, force: true });
+    return publicAccount(record);
+  }
+
+  /**
    * Which saved account TRAE is signed in as right now — and whether that could
    * be determined at all.
    *

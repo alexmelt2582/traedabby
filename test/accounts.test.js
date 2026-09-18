@@ -133,6 +133,30 @@ test("account snapshots can be exported and imported without duplicates", async 
   }
 });
 
+test("deleting an account removes only its index record and snapshot", async () => {
+  const dataDir = await tempDir();
+  try {
+    const store = new AccountStore(dataDir);
+    const keepId = await seedAccount(store, {
+      userId: "1000000000000011",
+      auth: { accessToken: "keep-token", expiredAt: "2026-09-28T13:58:26.609Z" },
+    });
+    const removeId = await seedAccount(store, {
+      userId: "1000000000000012",
+      auth: { accessToken: "remove-token", expiredAt: "2026-09-28T13:58:26.609Z" },
+    });
+
+    const deleted = await store.deleteAccount(removeId);
+    assert.equal(deleted.id, removeId);
+    assert.deepEqual((await store.list()).map((account) => account.id), [keepId]);
+    await assert.rejects(fs.access(store.snapshotPath(removeId)));
+    assert.equal(await store.deleteAccount(removeId), null);
+    await assert.rejects(store.deleteAccount("../outside"), /Invalid account id/);
+  } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("repairIndex removes sentinel email values", async () => {
   const dataDir = await tempDir();
   try {

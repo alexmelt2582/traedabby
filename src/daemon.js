@@ -1087,6 +1087,53 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
     return;
   }
 
+  if (request.method === "POST" && pathname === "/api/accounts/delete") {
+    if (
+      switchInFlight ||
+      loginStartInFlight ||
+      oauthManager.isActive() ||
+      fakeLogoutManager.isActive() ||
+      insightsRefreshInFlight ||
+      checkinInFlight ||
+      keepaliveInFlight
+    ) {
+      jsonResponse(response, 409, {
+        ok: false,
+        error: "账号操作正在进行，请稍后再删除",
+      });
+      return;
+    }
+    const body = await readRequestBody(request);
+    const accountId = String(body.accountId || "").trim();
+    const account = await accountStore.findAccount(accountId);
+    if (!account) {
+      jsonResponse(response, 404, { ok: false, error: "账号备份不存在" });
+      return;
+    }
+    try {
+      const storageRoot = await readJsonFile(STORAGE_PATH);
+      const active = await accountStore.resolveActiveAccount(storageRoot);
+      if (active.state === "matched" && active.id === accountId) {
+        jsonResponse(response, 409, {
+          ok: false,
+          error: "当前正在使用的账号不能删除，请先切换到其他账号",
+        });
+        return;
+      }
+    } catch {
+      // A live identity we cannot read must not block deleting a local backup.
+    }
+    const deleted = await accountStore.deleteAccount(accountId);
+    if (!deleted) {
+      jsonResponse(response, 404, { ok: false, error: "账号备份不存在" });
+      return;
+    }
+    await notifyAccountsUpdated(cdpClient);
+    console.log(`[accounts] deleted backup ${accountId}`);
+    jsonResponse(response, 200, { ok: true, account: deleted });
+    return;
+  }
+
   /**
    * The panel reports that it was just opened.
    *
