@@ -1,10 +1,9 @@
 import crypto from "node:crypto";
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { promisify } from "node:util";
 
 import { CdpClient } from "./cdp/client.js";
 import {
@@ -21,11 +20,9 @@ import {
 import { AccountStore } from "./lib/accounts.js";
 import {
   CHECKIN_INTERVALS,
-  PROXY_MODES,
   configPath,
   loadAppConfig,
   normalizeCheckin,
-  normalizeProxyConfig,
   normalizeTraeUpdate,
   saveAppConfig,
 } from "./lib/app-config.js";
@@ -35,27 +32,9 @@ import { detectSeaApi, loadInjectSource, renderInjectScript } from "./lib/inject
 import { readJsonFile, readTextFile, writeTextAtomic } from "./lib/json-file.js";
 import { serviceSpec } from "./lib/launch-spec.js";
 import {
-  STATIC_HOSTS,
-  describeErrorChain,
-  describeProbeVerdict,
-  formatProbeLine,
-  probeHosts,
-  probeSucceeded,
-  proxyChildEnv,
-  proxyEnvEnabled,
-  proxyEnvReport,
   stripProxyEnv,
 } from "./lib/net-diagnostics.js";
 import { DAEMON_LOG_PATH } from "./lib/runtime-paths.js";
-import { enableSystemCACertificates, formatCAStatus } from "./lib/system-ca.js";
-import {
-  PROXY_MODE_DESCRIPTIONS,
-  PROXY_MODE_LABELS,
-  buildProxyVars,
-  describeProxyState,
-  readWindowsSystemProxy,
-  resolveProxyVars,
-} from "./lib/system-proxy.js";
 import {
   TRAE_UPDATE_MODE_SUPPRESSED,
   applyTraeUpdateSetting,
@@ -132,7 +111,6 @@ const AUTO_KEEPALIVE_SWEEP_INTERVAL_MS = parseDuration(
 );
 
 const accountStore = new AccountStore(DATA_DIR);
-const execFileAsync = promisify(execFile);
 let cdpConnected = false;
 let switchInFlight = null;
 let loginStartInFlight = null;
@@ -245,47 +223,6 @@ async function notifyAccountsUpdated(cdpClient) {
   }
 }
 
-/* -------------------------------------------------------------------------- *
- * Network settings
- *
- * Node reads its proxy configuration once, when the process starts:
- * `NODE_USE_ENV_PROXY` and `HTTP_PROXY`/`HTTPS_PROXY` are ignored if they are set
- * later. The daemon therefore cannot switch proxy at runtime — it can only save
- * the configuration and restart itself. Every payload below says so explicitly,
- * because a save that silently needs a restart is worse than no save at all.
- * -------------------------------------------------------------------------- */
-
-/**
- * Loads the saved proxy configuration plus what it resolves to right now.
- *
- * In `system` mode this reads the Windows registry, so it costs a PowerShell
- * round-trip and is only called for settings requests.
- */
-async function readProxySettings() {
-  const config = await loadAppConfig(DATA_DIR);
-  const systemRead = config.proxy.mode === "system" ? await readWindowsSystemProxy() : null;
-  const resolved = buildProxyVars(config.proxy, systemRead);
-  return { config, systemRead, resolved };
-}
-
-/** The shape the panel's settings tab renders. */
-function proxySettingsPayload({ config, systemRead, resolved }) {
-  return {
-    modes: PROXY_MODES.map((mode) => ({
-      value: mode,
-      label: PROXY_MODE_LABELS[mode] ?? mode,
-      description: PROXY_MODE_DESCRIPTIONS[mode] ?? "",
-    })),
-    state: describeProxyState(config.proxy, resolved, systemRead),
-    // Whether *this* daemon process reaches the network through a proxy. Reported
-    // so "已保存" can never be mistaken for "已生效".
-    activeInThisProcess: proxyEnvEnabled() && Boolean(resolved.vars),
-    envProxyEnabled: proxyEnvEnabled(),
-    envReport: proxyEnvReport(),
-    configPath: configPath(DATA_DIR),
-  };
-}
-
 /**
  * Automatic check-in as the panel renders it.
  *
@@ -298,111 +235,6 @@ function checkinSettingsPayload(checkin) {
     intervalMinutes: checkin.intervalMinutes,
     onClientLoad: checkin.onClientLoad,
     options: [...CHECKIN_INTERVALS],
-  };
-}
-
-/**
- * Runs the host probe in a child process, with an environment chosen by the caller.
- *
- * A child is not optional here. A "direct" probe is only meaningful from a process
- * that was not started with `NODE_USE_ENV_PROXY`, and a proxied probe cannot reuse
- * this daemon's own connections because its proxy variables are already fixed.
- */
-async function probeHostsInChild(hosts, env) {
-  const launch = serviceSpec("net", [
-    "--probe-only",
-    ...hosts.flatMap((host) => ["--host", host]),
-  ]);
-  try {
-    const { stdout } = await execFileAsync(launch.command, launch.args, {
-      cwd: launch.cwd,
-      env,
-      encoding: "utf8",
-      timeout: 60000,
-      maxBuffer: 4 * 1024 * 1024,
-      windowsHide: true,
-    });
-    const line = String(stdout ?? "").trim().split(/\r?\n/).filter(Boolean).pop() ?? "";
-    const parsed = JSON.parse(line);
-    return { results: Array.isArray(parsed.results) ? parsed.results : [], error: null };
-  } catch (error) {
-    return { results: [], error: describeErrorChain(error) };
-  }
-}
-
-function probeRunPayload(run) {
-  if (!run) return null;
-  return {
-    results: run.results,
-    error: run.error,
-    lines: run.results.map(formatProbeLine),
-    reachable: run.results.length > 0 && run.results.every(probeSucceeded),
-  };
-}
-
-/**
- * Probes through the Windows system proxy without saving or changing anything.
- *
- * Only reached when the candidate configuration resolved to no proxy at all and
- * the direct probe failed. Since the default mode is `off`, an intranet user
- * would otherwise be told "unreachable" with no way to learn that a working
- * proxy is already configured in Windows — so the probe looks on their behalf
- * and the panel can name the one setting that fixes it.
- *
- * On a machine with no system proxy this returns null without spawning a child,
- * which keeps the ordinary case as cheap as it was.
- */
-async function probeSystemProxySuggestion(hosts, baseEnv) {
-  const systemRead = await readWindowsSystemProxy();
-  const resolved = buildProxyVars({ mode: "system", url: null, noProxy: "" }, systemRead);
-  if (!resolved.vars) return null;
-  return probeRunPayload(
-    await probeHostsInChild(hosts, proxyChildEnv({ proxyVars: resolved.vars, env: baseEnv })),
-  );
-}
-
-/**
- * Probes the required hosts twice: forced direct, then through the candidate
- * configuration. This is what lets the panel answer "是否需要代理" with evidence
- * instead of a guess, and it also works for a candidate that has not been saved.
- */
-async function testProxyConfiguration(body) {
-  const requested = Array.isArray(body?.hosts) ? body.hosts : [];
-  const hosts = (requested.length ? requested : STATIC_HOSTS)
-    .map((host) => String(host).trim())
-    .filter(Boolean);
-  const candidate = body?.proxy
-    ? normalizeProxyConfig(body.proxy)
-    : (await loadAppConfig(DATA_DIR)).proxy;
-
-  const systemRead = candidate.mode === "system" ? await readWindowsSystemProxy() : null;
-  const resolved = buildProxyVars(candidate, systemRead);
-
-  // Strip first, then add: the daemon's own environment carries the proxy it was
-  // started with, and inheriting it would make both probes measure the old setting.
-  const baseEnv = stripProxyEnv(process.env);
-  const direct = probeRunPayload(await probeHostsInChild(hosts, baseEnv));
-  const proxied = resolved.vars
-    ? probeRunPayload(
-        await probeHostsInChild(hosts, proxyChildEnv({ proxyVars: resolved.vars, env: baseEnv })),
-      )
-    : null;
-  const suggestion =
-    direct.reachable || proxied?.reachable
-      ? null
-      : await probeSystemProxySuggestion(hosts, baseEnv);
-
-  const verdict = describeProbeVerdict({ direct, proxied, suggestion });
-
-  return {
-    hosts,
-    direct,
-    proxied,
-    suggestion,
-    state: describeProxyState(candidate, resolved, systemRead),
-    conclusion: verdict.conclusion,
-    conclusionText: verdict.text,
-    severity: verdict.severity,
   };
 }
 
@@ -455,9 +287,8 @@ async function syncTraeUpdateSetting({ suppress, previousMode = null } = {}) {
  *
  * The helper is `service daemon --wait-pid <this pid>`, so it waits for this
  * process to disappear before spawning a replacement and the two never contend
- * for the listening port. It is spawned with a proxy-free environment on purpose:
- * otherwise it would inherit this process's `NODE_USE_ENV_PROXY` and old proxy
- * variables, and a change to "不使用代理" would keep using the previous proxy.
+ * for the listening port. The child environment is stripped of inherited proxy
+ * controls so the release build always uses a direct connection.
  *
  * The helper also re-creates the supervisor if it is missing, so a restart repairs
  * a machine where the logon autostart entry is absent.
@@ -1024,13 +855,22 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
   if (request.method === "GET" && pathname === "/api/accounts") {
     const accounts = await accountStore.list();
     let currentAccountId = null;
+    let currentAccountState = "unknown";
     try {
       const storageRoot = await readJsonFile(STORAGE_PATH);
-      currentAccountId = await accountStore.resolveCurrentAccountId(storageRoot);
+      const active = await accountStore.resolveActiveAccount(storageRoot);
+      currentAccountId = active.id;
+      currentAccountState = active.state;
     } catch {
       currentAccountId = null;
+      currentAccountState = "unknown";
     }
-    jsonResponse(response, 200, { ok: true, accounts, currentAccountId });
+    jsonResponse(response, 200, {
+      ok: true,
+      accounts,
+      currentAccountId,
+      currentAccountState,
+    });
     return;
   }
 
@@ -1523,14 +1363,13 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
   }
 
   if (request.method === "GET" && pathname === "/api/settings") {
-    const settings = await readProxySettings();
+    const config = await loadAppConfig(DATA_DIR);
     const updateState = await readTraeUpdateState();
     jsonResponse(response, 200, {
       ok: true,
-      network: proxySettingsPayload(settings),
-      checkin: checkinSettingsPayload(settings.config.checkin),
+      checkin: checkinSettingsPayload(config.checkin),
       traeUpdate: {
-        ...traeUpdatePayload(updateState, { suppress: settings.config.traeUpdate.suppress }),
+        ...traeUpdatePayload(updateState, { suppress: config.traeUpdate.suppress }),
         startupNotice: traeUpdateStartupNotice,
         startupError: traeUpdateStartupError,
       },
@@ -1584,40 +1423,13 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
       ...(body?.onClientLoad === undefined ? {} : { onClientLoad: body.onClientLoad }),
     });
     await saveAppConfig(DATA_DIR, { checkin });
-    // Unlike the proxy, this takes effect in the running process: the schedule is
-    // rebuilt here, and every later trigger re-reads the configuration. No
-    // restart, and no "restart to apply" notice in the panel.
+    // This takes effect in the running process: the schedule is rebuilt here,
+    // and every later trigger re-reads the configuration. No restart notice.
     rescheduleAutoCheckin?.({ initialRun: false });
     console.log(
       `[settings] checkin auto=${checkin.auto} interval=${checkin.intervalMinutes} onClientLoad=${checkin.onClientLoad}`,
     );
     jsonResponse(response, 200, { ok: true, checkin: checkinSettingsPayload(checkin) });
-    return;
-  }
-
-  if (request.method === "POST" && pathname === "/api/settings/network") {
-    const body = await readRequestBody(request);
-    const current = await loadAppConfig(DATA_DIR);
-    const proxy =
-      body?.proxy === undefined ? current.proxy : normalizeProxyConfig(body.proxy);
-    const saved = await saveAppConfig(DATA_DIR, { proxy });
-    const settings = await readProxySettings();
-    console.log(
-      `[settings] proxy mode=${saved.proxy.mode} url=${saved.proxy.url ? "set" : "unset"}`,
-    );
-    jsonResponse(response, 200, {
-      ok: true,
-      // Always true: the running daemon cannot adopt a proxy it did not start with.
-      restartRequired: true,
-      network: proxySettingsPayload(settings),
-    });
-    return;
-  }
-
-  if (request.method === "POST" && pathname === "/api/settings/network/test") {
-    const body = await readRequestBody(request);
-    const result = await testProxyConfiguration(body);
-    jsonResponse(response, 200, { ok: true, ...result });
     return;
   }
 
@@ -1665,13 +1477,6 @@ function installLogging() {
 async function main() {
   await fs.mkdir(DATA_DIR, { recursive: true });
   installLogging();
-
-  // Before the first request, because it only affects connections opened after
-  // the call. On an intranet whose proxy decrypts TLS this is the difference
-  // between working and failing every call with a certificate error — see
-  // system-ca.js, which widens the trusted roots to the same set Chromium (and
-  // therefore TRAE) already uses, and does not disable verification.
-  console.log(`[net] ${formatCAStatus(enableSystemCACertificates())}`);
 
   const purgedTransactionDirectory = await purgeLegacyTransactionDirectory(
     LEGACY_TRANSACTION_DIR,
@@ -1849,11 +1654,57 @@ async function main() {
       void runClientLoadCheckin();
     },
   });
+
+  async function synchronizeSavedAccount(account, { source = "account-saved" } = {}) {
+    if (!account?.id) return { ok: false, error: "Account id is missing" };
+
+    const cockpit = await resolveCockpitPolicy();
+    if (cockpit.action === "skip") {
+      console.log(`[${source}] account sync skipped because Cockpit Tools is running`);
+      return { ok: false, skipped: "cockpit" };
+    }
+
+    const failures = [];
+    try {
+      await runAccountCheckin([account.id], {
+        reason: source,
+        allowTokenRefresh: cockpit.action === "run",
+      });
+    } catch (error) {
+      failures.push(error.message || String(error));
+    }
+
+    if (cockpit.action === "run") {
+      insightsRefreshInFlight = refreshAccountsInsights([account.id]);
+      try {
+        await insightsRefreshInFlight;
+      } catch (error) {
+        failures.push(error.message || String(error));
+      } finally {
+        insightsRefreshInFlight = null;
+      }
+    } else {
+      console.warn(
+        `[${source}] credit refresh skipped because the Cockpit Tools state is unknown`,
+      );
+    }
+
+    await notifyAccountsUpdated(cdpClient);
+    if (failures.length) {
+      const message = failures.join(" | ");
+      console.error(`[${source}] account sync failed: ${message}`);
+      return { ok: false, error: message };
+    }
+    return { ok: true };
+  }
+
   const oauthManager = new TraeOAuthManager({
     accountStore,
     storagePath: STORAGE_PATH,
     exePath: TRAE_EXE,
     openBrowser: process.env.TRAE_ENHANCER_OPEN_BROWSER !== "0",
+    onAccountSaved: (account, metadata) =>
+      synchronizeSavedAccount(account, { source: metadata?.source || "oauth" }),
   });
   const fakeLogoutManager = new TraeFakeLogoutManager({
     accountStore,
@@ -1863,6 +1714,8 @@ async function main() {
     isTraeRunning: async () => (await findTraeProcessIds(TRAE_EXE)).length > 0,
     getLiveIdentity: () => cdpClient.getLiveIdentity(),
     sessionPath: FAKE_LOGOUT_SESSION_PATH,
+    onAccountSaved: (account, metadata) =>
+      synchronizeSavedAccount(account, { source: metadata?.source || "fake-logout" }),
   });
   cdpClient.start();
 

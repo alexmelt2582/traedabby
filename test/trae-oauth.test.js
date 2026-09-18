@@ -83,7 +83,7 @@ test("expired authCodeInfo is rejected", () => {
   );
 });
 
-test("OAuth manager reports pending and exchanging sessions as active", () => {
+test("OAuth manager reports pending, exchanging and syncing sessions as active", () => {
   const manager = new TraeOAuthManager({
     accountStore: {},
     storagePath: "",
@@ -95,7 +95,32 @@ test("OAuth manager reports pending and exchanging sessions as active", () => {
   manager.sessions.set("pending", { status: "complete" });
   manager.sessions.set("exchanging", { status: "exchanging" });
   assert.equal(manager.isActive(), true);
+  manager.sessions.set("exchanging", { status: "complete" });
+  manager.sessions.set("syncing", { status: "syncing" });
+  assert.equal(manager.isActive(), true);
   manager.sessions.clear();
   manager.sessions.set("done", { status: "complete" });
   assert.equal(manager.isActive(), false);
+});
+
+test("OAuth manager waits for the post-login account sync hook", async () => {
+  let called = false;
+  const manager = new TraeOAuthManager({
+    accountStore: {},
+    storagePath: "",
+    exePath: "",
+    onAccountSaved: async (account, metadata) => {
+      called = true;
+      assert.equal(account.id, "acct_test");
+      assert.equal(metadata.source, "oauth");
+    },
+    logger: { log() {}, error() {} },
+  });
+
+  const result = await manager.notifyAccountSaved(
+    { id: "acct_test" },
+    { source: "oauth" },
+  );
+  assert.deepEqual(result, { ok: true });
+  assert.equal(called, true);
 });

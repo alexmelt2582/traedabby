@@ -487,11 +487,19 @@ export async function openExternal(url) {
 }
 
 export class TraeOAuthManager {
-  constructor({ accountStore, storagePath, exePath, openBrowser = true, logger = console }) {
+  constructor({
+    accountStore,
+    storagePath,
+    exePath,
+    openBrowser = true,
+    onAccountSaved = null,
+    logger = console,
+  }) {
     this.accountStore = accountStore;
     this.storagePath = storagePath;
     this.exePath = exePath;
     this.openBrowser = openBrowser;
+    this.onAccountSaved = typeof onAccountSaved === "function" ? onAccountSaved : null;
     this.logger = logger;
     this.sessions = new Map();
   }
@@ -604,7 +612,10 @@ export class TraeOAuthManager {
 
   isActive() {
     return [...this.sessions.values()].some(
-      (session) => session.status === "pending" || session.status === "exchanging",
+      (session) =>
+        session.status === "pending" ||
+        session.status === "exchanging" ||
+        session.status === "syncing",
     );
   }
 
@@ -736,6 +747,18 @@ export class TraeOAuthManager {
     }
   }
 
+  async notifyAccountSaved(account, metadata = {}) {
+    if (!this.onAccountSaved) return { ok: true, skipped: "no-hook" };
+    try {
+      await this.onAccountSaved(account, metadata);
+      return { ok: true };
+    } catch (error) {
+      const message = error.message || String(error);
+      this.logger.error(`[oauth] post-login sync failed: ${message}`);
+      return { ok: false, error: message };
+    }
+  }
+
   async finishSession(session, callback) {
     if (session.finishing || session.status !== "pending") return;
     session.finishing = true;
@@ -765,6 +788,12 @@ export class TraeOAuthManager {
         liveIdentity: identity,
       });
       session.account = saved.account;
+      session.status = "syncing";
+      const sync = await this.notifyAccountSaved(saved.account, {
+        source: "oauth",
+        createdSnapshot: saved.createdSnapshot,
+      });
+      if (!sync.ok && !sync.skipped) session.syncError = sync.error;
       session.status = "complete";
       this.logger.log(`[oauth] completed loginId=${session.loginId}`);
     } catch (error) {

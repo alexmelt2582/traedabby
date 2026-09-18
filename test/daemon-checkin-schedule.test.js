@@ -88,7 +88,7 @@ test("the client-load trigger reads the switches when it fires, not when it was 
 test("the settings payload publishes the check-in state and the allowed intervals", () => {
   const route = routeBlock("/api/settings");
   assert.ok(
-    route.includes("checkin: checkinSettingsPayload(settings.config.checkin)"),
+    route.includes("checkin: checkinSettingsPayload(config.checkin)"),
     "the panel has no way to render the current check-in setting",
   );
 });

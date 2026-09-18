@@ -280,41 +280,11 @@
     #${ROOT_ID} .te-badge.ok { color: #16a34a; border-color: #16a34a66; }
     #${ROOT_ID} .te-badge.warn { color: #d97706; border-color: #d9770666; }
 
-    #${ROOT_ID} .te-proxy-advanced {
-      margin-top: 12px;
-    }
-
-    #${ROOT_ID} .te-proxy-advanced > summary {
-      cursor: pointer;
-      font-size: 12px;
-      opacity: 0.75;
-      user-select: none;
-    }
-
-    #${ROOT_ID} .te-proxy-advanced[open] > summary {
-      margin-bottom: 8px;
-    }
-
     #${ROOT_ID} .te-section-actions {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
       margin-top: 12px;
-    }
-
-    #${ROOT_ID} .te-probe-output {
-      margin-top: 10px;
-      max-height: 200px;
-      overflow: auto;
-      padding: 9px 10px;
-      border: 1px solid var(--te-border);
-      border-radius: 8px;
-      color: var(--te-muted);
-      background: var(--te-panel-solid);
-      font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, monospace);
-      font-size: 11px;
-      white-space: pre-wrap;
-      word-break: break-all;
     }
 
     #${ROOT_ID} .te-restart-banner {
@@ -1237,7 +1207,6 @@
     <div class="te-settings-shell">
       <nav class="te-settings-nav" aria-label="设置分类">
         <button class="te-settings-nav-item active" type="button" data-settings-section="checkin">签到</button>
-        <button class="te-settings-nav-item" type="button" data-settings-section="network">网络</button>
         <button class="te-settings-nav-item" type="button" data-settings-section="update">更新</button>
         <button class="te-settings-nav-item" type="button" data-settings-section="maintenance">维护</button>
       </nav>
@@ -1253,22 +1222,6 @@
             <label class="te-field"><span>页面加载时补签</span><select class="te-select te-checkin-clientload"><option value="on">开启</option><option value="off">关闭</option></select></label>
             <div class="te-status-list te-checkin-status"></div>
             <div class="te-section-actions"><button class="te-primary te-checkin-save" type="button">保存</button></div>
-          </div>
-        </section>
-        <section class="te-settings-panel" data-settings-panel="network">
-          <div class="te-settings-panel-head">
-            <div><h2>网络连接</h2><p>普通网络保持默认即可；公司内网无法联网时再改这里。</p></div>
-            <span class="te-badge te-proxy-badge">未读取</span>
-          </div>
-          <div class="te-section">
-            <select class="te-select te-proxy-mode"></select>
-            <div class="te-section-hint te-proxy-mode-desc"></div>
-            <label class="te-field te-proxy-url-field" hidden><span>代理地址</span><input class="te-proxy-url" type="text" spellcheck="false" placeholder="127.0.0.1:7890 或 http://127.0.0.1:7890"></label>
-            <label class="te-field te-proxy-noproxy-field" hidden><span>附加直连地址（可选，逗号分隔）</span><input class="te-proxy-noproxy" type="text" spellcheck="false" placeholder="*.corp.example.com"></label>
-            <div class="te-status-list te-proxy-status"></div>
-            <div class="te-section-actions"><button class="te-secondary te-proxy-reload" type="button">重新读取</button><button class="te-secondary te-proxy-test" type="button">测试连接</button><button class="te-primary te-proxy-save" type="button">保存</button></div>
-            <div class="te-restart-banner te-proxy-restart"><span>已保存，重启后台服务后才会生效。</span><button class="te-secondary te-daemon-restart" type="button">立即重启</button></div>
-            <details class="te-proxy-advanced"><summary>诊断信息</summary><div class="te-status-list te-proxy-detail"></div><div class="te-probe-output te-proxy-probe" hidden></div></details>
           </div>
         </section>
         <section class="te-settings-panel" data-settings-panel="update">
@@ -1611,7 +1564,7 @@
     };
   }
 
-  function renderAccounts(accounts, currentAccountId) {
+  function renderAccounts(accounts, currentAccountId, currentAccountState) {
     list.replaceChildren();
     accountsById = new Map(accounts.map((account) => [account.id, account]));
     if (!accounts.length) {
@@ -1630,6 +1583,8 @@
           retryAutoBackup(retry).catch(() => {});
         });
         empty.append(retry);
+      } else if (currentAccountState === "unknown") {
+        empty.textContent = "TRAE 尚未登录";
       } else {
         empty.textContent = "暂无账号备份";
       }
@@ -1773,7 +1728,7 @@
       accountCount = data.accounts.length;
       header.querySelector(".te-subtitle").textContent =
         activeTab === "about" ? `v${APP_VERSION}` : `账号 ${accountCount}`;
-      renderAccounts(data.accounts, data.currentAccountId);
+      renderAccounts(data.accounts, data.currentAccountId, data.currentAccountState);
       return data;
     } catch (error) {
       if (generation !== refreshGeneration) return;
@@ -1809,6 +1764,7 @@
     const backup = await autoBackupCurrent();
     adoptionError = backup.ok ? null : backup.error;
     await refresh();
+    if (backup.ok) await reconcileWithDaemon();
   }
 
   function switchTab(name) {
@@ -1909,28 +1865,11 @@
   /* ----------------------------------------------------------------------- *
    * Settings tab
    *
-   * The daemon saves the proxy configuration but cannot adopt it: Node reads its
-   * proxy variables once, at start-up. So every save says "restart to take effect"
-   * and offers the restart, rather than letting the panel imply that saved means
-   * live — which is exactly the confusion that produced the intranet report.
+   * The release branch only exposes user-level settings that are local and
+   * directly verifiable: check-in schedule and TRAE update behaviour.
    * ----------------------------------------------------------------------- */
 
   const settingsUi = {
-    mode: settingsPane.querySelector(".te-proxy-mode"),
-    modeDesc: settingsPane.querySelector(".te-proxy-mode-desc"),
-    urlField: settingsPane.querySelector(".te-proxy-url-field"),
-    url: settingsPane.querySelector(".te-proxy-url"),
-    noProxyField: settingsPane.querySelector(".te-proxy-noproxy-field"),
-    noProxy: settingsPane.querySelector(".te-proxy-noproxy"),
-    status: settingsPane.querySelector(".te-proxy-status"),
-    detail: settingsPane.querySelector(".te-proxy-detail"),
-    advanced: settingsPane.querySelector(".te-proxy-advanced"),
-    badge: settingsPane.querySelector(".te-proxy-badge"),
-    probe: settingsPane.querySelector(".te-proxy-probe"),
-    restartBanner: settingsPane.querySelector(".te-proxy-restart"),
-    reload: settingsPane.querySelector(".te-proxy-reload"),
-    test: settingsPane.querySelector(".te-proxy-test"),
-    save: settingsPane.querySelector(".te-proxy-save"),
     restartButtons: Array.from(settingsPane.querySelectorAll(".te-daemon-restart")),
     traeMode: settingsPane.querySelector(".te-trae-mode"),
     traeBadge: settingsPane.querySelector(".te-trae-badge"),
@@ -1944,9 +1883,7 @@
     checkinStatus: settingsPane.querySelector(".te-checkin-status"),
     checkinSave: settingsPane.querySelector(".te-checkin-save"),
   };
-  let settingsModes = [];
   let settingsLoaded = false;
-  let lastSavedForm = null;
   let traeUpdateNoticeShown = false;
 
   function appendStatusLine(container, label, value) {
@@ -1958,70 +1895,6 @@
     text.textContent = value;
     line.append(key, text);
     container.append(line);
-  }
-
-  function proxyModeLabel(value) {
-    return settingsModes.find((mode) => mode.value === value)?.label ?? value ?? "-";
-  }
-
-  function currentProxyForm() {
-    return {
-      mode: settingsUi.mode.value || "system",
-      url: settingsUi.url.value.trim() || null,
-      noProxy: settingsUi.noProxy.value.trim(),
-    };
-  }
-
-  function applyProxyModeVisibility(mode) {
-    settingsUi.urlField.hidden = mode !== "manual";
-    // Only the modes that can carry extra direct addresses expose the field.
-    settingsUi.noProxyField.hidden = mode !== "manual" && mode !== "system";
-    settingsUi.modeDesc.textContent =
-      settingsModes.find((entry) => entry.value === mode)?.description ?? "";
-  }
-
-  function renderProxyState(network) {
-    const state = network.state ?? {};
-    const active = Boolean(state.active);
-    const live = active && Boolean(network.activeInThisProcess);
-    settingsUi.badge.className = `te-badge te-proxy-badge${active ? (live ? " ok" : " warn") : ""}`;
-    settingsUi.badge.textContent = active ? (live ? "已生效" : "待重启") : "未使用代理";
-
-    settingsUi.status.textContent = "";
-    appendStatusLine(
-      settingsUi.status,
-      "当前状态",
-      active ? `正在使用：${proxyModeLabel(state.source)}` : "不使用代理，直接连网",
-    );
-    if (active && !live) {
-      appendStatusLine(
-        settingsUi.status,
-        "需要重启",
-        "改动还没生效，点下面的「立即重启」后开始使用。",
-      );
-    }
-    for (const note of state.notes ?? []) {
-      appendStatusLine(settingsUi.status, "说明", note);
-    }
-
-    // Everything below is detail that only matters while diagnosing, so it sits
-    // behind the disclosure instead of competing with the mode selector.
-    settingsUi.detail.textContent = "";
-    appendStatusLine(settingsUi.detail, "配置文件", network.configPath ?? "-");
-    if (state.resolvedNames?.length) {
-      appendStatusLine(settingsUi.detail, "已设置变量", state.resolvedNames.join(", "));
-    }
-    if (state.system) {
-      appendStatusLine(settingsUi.detail, "系统代理", state.system.enabled ? "已启用" : "未启用");
-      if (state.system.hasServer) appendStatusLine(settingsUi.detail, "系统地址", state.system.server);
-      if (state.system.override) appendStatusLine(settingsUi.detail, "系统例外", state.system.override);
-      if (state.system.hasAutoConfigUrl) {
-        appendStatusLine(settingsUi.detail, "自动配置脚本", state.system.autoConfigUrl);
-      }
-    }
-    if (state.systemReadError) {
-      appendStatusLine(settingsUi.detail, "系统代理读取", state.systemReadError);
-    }
   }
 
   /**
@@ -2152,8 +2025,8 @@
       });
       renderCheckin(data.checkin);
       applyAboutCheckinText(data.checkin);
-      // No restart banner here, unlike the proxy: the daemon rebuilds its schedule
-      // in place, so "已保存" and "已生效" are the same moment.
+      // The daemon rebuilds its schedule in place, so "已保存" and "已生效"
+      // are the same moment.
       showToast("已保存，立即生效");
     } catch (error) {
       showToast(error.message || String(error), true);
@@ -2196,147 +2069,17 @@
   }
 
   async function loadSettings({ silent = false } = {}) {
-    if (!silent) {
-      settingsUi.badge.className = "te-badge te-proxy-badge";
-      settingsUi.badge.textContent = "读取中";
-    }
-    settingsUi.status.textContent = "";
     try {
       const data = await api("/api/settings");
-      const network = data.network ?? {};
-      const selected = network.state?.mode ?? "system";
-      // `env` stays in the data model because v1.0.0 configs migrate into it, but
-      // it is not offered as a choice: the three modes cover what a user needs and
-      // the fourth only added noise. It is still listed while it *is* the current
-      // value, so a migrated config is never displayed as something else.
-      settingsModes = (network.modes ?? []).filter(
-        (mode) => mode.value !== "env" || mode.value === selected,
-      );
-      settingsUi.mode.textContent = "";
-      for (const mode of settingsModes) {
-        const option = document.createElement("option");
-        option.value = mode.value;
-        option.textContent = mode.label;
-        settingsUi.mode.append(option);
-      }
-      settingsUi.mode.value = settingsModes.some((mode) => mode.value === selected)
-        ? selected
-        : "system";
-      settingsUi.url.value = network.state?.url ?? "";
-      settingsUi.noProxy.value = network.state?.noProxy ?? "";
-      applyProxyModeVisibility(settingsUi.mode.value);
-      renderProxyState(network);
       renderTraeUpdate(data.traeUpdate);
       renderCheckin(data.checkin);
-      lastSavedForm = currentProxyForm();
       settingsLoaded = true;
     } catch (error) {
-      settingsUi.badge.className = "te-badge te-proxy-badge warn";
-      settingsUi.badge.textContent = "读取失败";
       settingsUi.traeBadge.className = "te-badge te-trae-badge warn";
       settingsUi.traeBadge.textContent = "读取失败";
       settingsUi.traeStatus.textContent = "";
       appendStatusLine(settingsUi.traeStatus, "错误", error.message || String(error));
-      appendStatusLine(settingsUi.status, "错误", error.message || String(error));
-    }
-  }
-
-  function formatProbeReport(result) {
-    const lines = [`探测目标：${(result.hosts ?? []).join("、")}`, "", "直连："];
-    if (result.direct?.error) lines.push(`  ${result.direct.error}`);
-    for (const line of result.direct?.lines ?? []) lines.push(`  ${line}`);
-    lines.push("");
-    if (result.proxied) {
-      lines.push(`走配置代理（来源：${proxyModeLabel(result.state?.source)}）：`);
-      if (result.proxied.error) lines.push(`  ${result.proxied.error}`);
-      for (const line of result.proxied.lines ?? []) lines.push(`  ${line}`);
-    } else {
-      lines.push("走配置代理：当前配置没有解析出可用代理，已跳过。");
-      for (const note of result.state?.notes ?? []) lines.push(`  ${note}`);
-    }
-    // Only present when nothing the user configured produced a proxy, so the
-    // report can name the setting that would work instead of leaving them to
-    // guess. Nothing here is saved.
-    if (result.suggestion) {
-      lines.push("");
-      lines.push("走系统代理（仅供参考，没有改动任何设置）：");
-      if (result.suggestion.error) lines.push(`  ${result.suggestion.error}`);
-      for (const line of result.suggestion.lines ?? []) lines.push(`  ${line}`);
-    }
-    lines.push("", result.conclusionText ?? "");
-    return lines.join("\n");
-  }
-
-  function setSettingsBusy(busy) {
-    for (const button of [settingsUi.reload, settingsUi.test, settingsUi.save]) {
-      button.disabled = busy;
-    }
-  }
-
-  async function testProxyConnection() {
-    const form = currentProxyForm();
-    if (form.mode === "manual" && !form.url) {
-      showToast("手动模式需要先填写代理地址", true);
-      return;
-    }
-    setSettingsBusy(true);
-    // The output sits behind the disclosure, so open it or the result is invisible.
-    settingsUi.advanced.open = true;
-    settingsUi.probe.hidden = false;
-    settingsUi.probe.textContent = "正在探测（直连和代理各试一次），大约需要几秒...";
-    try {
-      const result = await api("/api/settings/network/test", {
-        method: "POST",
-        body: JSON.stringify({ proxy: form }),
-      });
-      settingsUi.probe.textContent = formatProbeReport(result);
-      // `severity` is the daemon's own verdict on whether the user must act, so
-      // the toast no longer has to infer it from the conclusion string.
-      showToast(result.conclusionText ?? "探测完成", result.severity === "error");
-    } catch (error) {
-      settingsUi.probe.textContent = error.message || String(error);
-      showToast(error.message || String(error), true);
-    } finally {
-      setSettingsBusy(false);
-    }
-  }
-
-  async function saveProxySettings() {
-    const form = currentProxyForm();
-    if (form.mode === "manual" && !form.url) {
-      showToast("手动模式需要先填写代理地址", true);
-      return;
-    }
-    setSettingsBusy(true);
-    try {
-      const data = await api("/api/settings/network", {
-        method: "POST",
-        body: JSON.stringify({ proxy: form }),
-      });
-      const network = data.network ?? {};
-      settingsModes = network.modes ?? settingsModes;
-      renderProxyState(network);
-      // Restarting is only worth insisting on when the running process does not
-      // already use exactly these values.
-      const previous = lastSavedForm;
-      const unchanged =
-        previous !== null &&
-        previous.mode === form.mode &&
-        previous.url === form.url &&
-        previous.noProxy === form.noProxy &&
-        Boolean(network.activeInThisProcess);
-      lastSavedForm = { ...form };
-      if (!data.restartRequired || unchanged) {
-        settingsUi.restartBanner.classList.remove("show");
-        showToast(unchanged ? "代理配置没有变化" : "已保存");
-      } else {
-        settingsUi.restartBanner.classList.add("show");
-        showToast("已保存，重启守护进程后生效");
-      }
-    } catch (error) {
-      showToast(error.message || String(error), true);
-    } finally {
-      setSettingsBusy(false);
+      if (!silent) showToast(error.message || String(error), true);
     }
   }
 
@@ -2571,6 +2314,8 @@
         setLoginStatus("请在浏览器中完成扫码或账号授权，完成后会自动加入账号列表。");
       } else if (result.status === "exchanging") {
         setLoginStatus("授权已收到，正在保存账号登录信息...");
+      } else if (result.status === "syncing") {
+        setLoginStatus("账号已保存，正在同步额度和签到...");
       } else if (result.status === "complete") {
         setLoginStatus("账号已加入列表，当前登录账号不会被切换。");
         await refresh();
@@ -2620,6 +2365,7 @@
       clearing: "正在切换到登录页...",
       starting: "正在重新打开 TRAE 登录页...",
       awaiting_login: "请在 TRAE 登录页扫码登录新账号，登录后会自动保存。",
+      syncing: "新账号已保存，正在同步额度和签到...",
       cancelling: "正在取消并恢复原账号...",
       restoring: "正在恢复原账号并重新打开 TRAE...",
       complete: "新账号已加入列表。",
@@ -2958,6 +2704,7 @@
 
   function openPanel() {
     panel.classList.add("open");
+    adoptionError = null;
     // The daemon adopts the signed-in account on its own now, so this is only a
     // fallback for the moment the panel is opened. Kept because it is the one path
     // that works when the daemon has been running since before TRAE was signed in.
@@ -2967,7 +2714,10 @@
     syncingCheckin = true;
     refresh()
       .then(async (data) => {
-        if (data?.accounts && !data.currentAccountId) {
+        if (
+          data?.accounts?.length === 0 &&
+          data.currentAccountState === "not-managed"
+        ) {
           const backup = await autoBackupCurrent();
           if (backup.ok) {
             adoptionError = null;
@@ -2975,7 +2725,11 @@
           } else {
             adoptionError = backup.error;
             // Repaint so the reason replaces the bare empty state right away.
-            renderAccounts(data.accounts, data.currentAccountId);
+            renderAccounts(
+              data.accounts,
+              data.currentAccountId,
+              data.currentAccountState,
+            );
           }
         }
         const result = await reconcileWithDaemon();
@@ -3025,19 +2779,6 @@
   });
   settingsPane.querySelectorAll(".te-settings-nav-item").forEach((item) => {
     item.addEventListener("click", () => switchSettingsSection(item.dataset.settingsSection));
-  });
-  settingsUi.mode.addEventListener("change", () => {
-    applyProxyModeVisibility(settingsUi.mode.value);
-  });
-  settingsUi.reload.addEventListener("click", () => {
-    // An explicit re-read is allowed to overwrite the form, it is the user's ask.
-    loadSettings().catch(() => {});
-  });
-  settingsUi.test.addEventListener("click", () => {
-    testProxyConnection().catch(() => {});
-  });
-  settingsUi.save.addEventListener("click", () => {
-    saveProxySettings().catch(() => {});
   });
   settingsUi.traeSave.addEventListener("click", () => {
     saveTraeUpdate().catch(() => {});

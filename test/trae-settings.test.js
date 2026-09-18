@@ -158,7 +158,7 @@ test("suppressing an existing file keeps every other setting and makes a backup"
   const dir = await tempUserData();
   const settingsPath = path.join(dir, "User", "settings.json");
   await fs.mkdir(path.dirname(settingsPath), { recursive: true });
-  const original = '{\n\t"AI.rules.importClaudeMd": true,\n\t"trae.network.proxy.effectiveMode": "system"\n}\n';
+  const original = '{\n\t"AI.rules.importClaudeMd": true,\n\t"files.autoSave": "off"\n}\n';
   await fs.writeFile(settingsPath, original, "utf8");
 
   const result = await applyTraeUpdateSetting({ userDataDir: dir, suppress: true });
@@ -167,9 +167,9 @@ test("suppressing an existing file keeps every other setting and makes a backup"
   const text = await fs.readFile(settingsPath, "utf8");
   assert.equal(
     text,
-    '{\n\t"update.mode": "manual",\n\t"AI.rules.importClaudeMd": true,\n\t"trae.network.proxy.effectiveMode": "system"\n}\n',
+    '{\n\t"update.mode": "manual",\n\t"AI.rules.importClaudeMd": true,\n\t"files.autoSave": "off"\n}\n',
   );
-  assert.equal(text.includes('"trae.network.proxy.effectiveMode": "system"'), true);
+  assert.equal(text.includes('"files.autoSave": "off"'), true);
   assert.equal(await fs.readFile(result.backupPath, "utf8"), original);
 });
 

@@ -11,8 +11,8 @@
  *   restart    stop, then start the background service
  *   status     Print what is currently running
  *   locate     Show where TRAE was found, and every location that was probed
- *   configure  Save or clear the TRAE executable path, or toggle environment proxy
- *   net        Probe the required hosts directly and through the environment proxy
+ *   configure  Save or clear the TRAE executable path
+ *   net        Probe the required hosts directly
  *   install    Register the logon autostart entry (background service only)
  *   uninstall  Remove the logon autostart entry
  *   tray       Start the tray icon host
@@ -40,7 +40,6 @@ import {
   daemonSpec,
   launcherSpec,
   serviceBaseArgs,
-  serviceSpec,
   watchdogAutostartPlan,
   watchdogSpec,
 } from "../src/lib/launch-spec.js";
@@ -58,9 +57,6 @@ import {
 } from "../src/lib/autostart.js";
 import {
   normalizeTraeExe,
-  normalizeUseEnvProxy,
-  normalizeProxyMode,
-  normalizeProxyUrl,
   configPath,
   loadAppConfig,
   saveAppConfig,
@@ -74,30 +70,16 @@ import {
 } from "../src/lib/trae-locate.js";
 import {
   STATIC_HOSTS,
-  describeErrorChain,
-  describeProbeVerdict,
   formatProbeLine,
   probeHosts,
   probeSucceeded,
-  proxyChildEnv,
-  proxyEnvEnabled,
-  proxyEnvReport,
+  stripProxyEnv,
 } from "../src/lib/net-diagnostics.js";
-import {
-  PROXY_MODE_LABELS,
-  buildProxyVars,
-  describeProxyState,
-  describeSystemProxy,
-  readWindowsSystemProxy,
-  redactProxyUrl,
-  resolveProxyVars,
-} from "../src/lib/system-proxy.js";
 import {
   flagValue,
   parseServiceArgs,
 } from "../src/lib/cli-args.js";
 import { writeTextAtomic, readTextFile, writeJsonAtomic } from "../src/lib/json-file.js";
-import { enableSystemCACertificates, formatCAStatus } from "../src/lib/system-ca.js";
 import { buildTrayConfig } from "../src/lib/tray-config.js";
 import { buildTrayIco } from "../src/lib/tray-icon.js";
 import {
@@ -308,7 +290,7 @@ async function commandStart(args = []) {
  * race a daemon that is already booting, which makes it the wrong tool for a
  * user asking for the service to be started now.
  */
-function spawnDaemonNow(proxyVars = null) {
+function spawnDaemonNow() {
   const launch = daemonSpec();
   const child = spawn(launch.command, launch.args, {
     cwd: launch.cwd,
@@ -316,7 +298,7 @@ function spawnDaemonNow(proxyVars = null) {
     stdio: "ignore",
     windowsHide: true,
     env: {
-      ...proxyChildEnv({ proxyVars }),
+      ...stripProxyEnv(process.env),
       TRAE_ENHANCER_UI_PORT: String(UI_PORT),
     },
   });
@@ -357,13 +339,11 @@ async function commandDaemon(args = []) {
     if (!exited) log("旧守护进程仍未退出；如果它仍在响应，就继续沿用它。");
   }
 
-  const config = await loadAppConfig(DATA_DIR);
-  const proxy = await resolveProxyVars(config.proxy);
   let health = await readHealth();
   if (health) {
     log(`daemon already running (pid ${health.pid})`);
   } else {
-    const pid = spawnDaemonNow(proxy.vars);
+    const pid = spawnDaemonNow();
     log(`daemon was not running; started pid ${pid ?? "unknown"}`);
     health = await waitForHealth(STARTUP_WAIT_MS);
   }
@@ -632,7 +612,6 @@ async function commandLocate(args = []) {
   }
 }
 
-const NET_PROBE_FLAG = "--probe-only";
 
 function parseHostArguments(args) {
   const hosts = [];
@@ -642,118 +621,33 @@ function parseHostArguments(args) {
   return hosts;
 }
 
-function formatProxySection({ proxy, resolved, systemRead }) {
-  const lines = [];
-  lines.push(`代理模式        : ${PROXY_MODE_LABELS[proxy.mode] ?? proxy.mode}`);
-  if (proxy.mode === "manual") {
-    lines.push(`配置的代理地址  : ${redactProxyUrl(proxy.url ?? "") || "(未填写)"}`);
-  }
-  if (proxy.noProxy) {
-    lines.push(`附加 NO_PROXY   : ${proxy.noProxy}`);
-  }
-  lines.push(
-    resolved.vars
-      ? `本次解析结果    : 生效（来源: ${PROXY_MODE_LABELS[resolved.source] ?? resolved.source}；已设置 ${Object.keys(resolved.vars).sort().join(", ")}）`
-      : "本次解析结果    : 未生效",
-  );
-  for (const note of resolved.notes ?? []) lines.push(`                  ${note}`);
-
-  if (proxy.mode === "system") {
-    if (!systemRead || systemRead.available === false) {
-      lines.push("系统代理        : 读取失败");
-      if (systemRead?.error) lines.push(`                  ${systemRead.error}`);
-    } else {
-      const view = describeSystemProxy(systemRead.snapshot);
-      lines.push(`系统代理已启用  : ${view.enabled ? "是" : "否"}`);
-      if (view.hasServer) lines.push(`系统代理地址    : ${view.server}`);
-      for (const [scheme, value] of Object.entries(view.byScheme)) {
-        lines.push(`  按协议 ${scheme.padEnd(6)}: ${value}`);
-      }
-      if (view.override) lines.push(`系统代理例外    : ${view.override}`);
-      if (view.hasAutoConfigUrl) lines.push(`自动配置脚本    : ${view.autoConfigUrl}`);
-    }
-  }
-  return lines;
-}
-
-function formatNetworkReport({ hosts, direct, proxied, suggestion, proxy, resolved, systemRead, verdict }) {
+function formatNetworkReport({ hosts, direct }) {
   const lines = [];
   lines.push(`配置文件        : ${configPath(DATA_DIR)}`);
-  // Reported because on an intranet it is the difference between working and
-  // failing: without it a TLS-decrypting proxy is rejected as an unknown issuer.
-  lines.push(`证书信任        : ${formatCAStatus(enableSystemCACertificates())}`);
-  lines.push(...formatProxySection({ proxy, resolved, systemRead }));
-  lines.push(`本进程代理生效  : ${proxyEnvEnabled() ? "是" : "否"}`);
-  lines.push("");
-  lines.push("代理环境变量（只报是否设置，不显示值）:");
-  for (const entry of proxyEnvReport()) {
-    lines.push(`  ${entry.set ? "[已设置]" : "[ 未设置]" } ${entry.name}`);
-  }
-  lines.push("");
   lines.push(`直连探测（${hosts.join(", ")}）:`);
   for (const result of direct) lines.push(`  ${formatProbeLine(result)}`);
-  if (proxied) {
-    lines.push("");
-    lines.push("走配置代理探测:");
-    for (const result of proxied) lines.push(`  ${formatProbeLine(result)}`);
-  } else if (!resolved.vars) {
-    lines.push("");
-    lines.push("当前配置没有解析出可用代理，跳过代理模式探测。");
-  }
-  if (suggestion?.length) {
-    lines.push("");
-    lines.push("走系统代理探测（仅供参考，没有保存任何设置）:");
-    for (const result of suggestion) lines.push(`  ${formatProbeLine(result)}`);
-  }
   lines.push("");
-  lines.push(`结论: ${verdict?.text ?? "未知"}`);
+  lines.push(
+    direct.length > 0 && direct.every(probeSucceeded)
+      ? "结论: 直连可以正常访问。"
+      : "结论: 有地址无法直连，请把上面的错误码发给排查方。",
+  );
   return lines.join("\n");
 }
 
 async function commandNet(args = []) {
   const hosts = [...new Set([...STATIC_HOSTS, ...parseHostArguments(args)])];
-
-  // Child mode: probe once and report JSON, so the parent can compare direct
-  // against proxied results inside the very same machine.
-  if (args.includes(NET_PROBE_FLAG)) {
-    log(JSON.stringify({ results: await probeHosts(hosts) }));
-    return;
-  }
-
-  const config = await loadAppConfig(DATA_DIR);
-  const systemRead = config.proxy.mode === "system" ? await readWindowsSystemProxy() : null;
-  const resolved = buildProxyVars(config.proxy, systemRead);
   const direct = await probeHosts(hosts);
-  let proxied = null;
-  if (resolved.vars) proxied = await probeThroughProxy(hosts, resolved.vars);
-
-  const directRun = asProbeRun(direct);
-  const proxiedRun = asProbeRun(proxied);
-  // Only when nothing the user configured produced a proxy. With the default
-  // `off` mode an intranet machine would otherwise be told "unreachable" and
-  // never learn that Windows already holds a working proxy.
-  const suggestion =
-    directRun.reachable || proxiedRun?.reachable ? null : await probeSystemProxySuggestion(hosts);
-  const verdict = describeProbeVerdict({
-    direct: directRun,
-    proxied: proxiedRun,
-    suggestion: asProbeRun(suggestion),
-  });
+  const reachable = direct.length > 0 && direct.every(probeSucceeded);
 
   if (args.includes("--json")) {
     log(
       JSON.stringify(
         {
           hosts,
-          proxy: describeProxyState(config.proxy, resolved, systemRead),
-          proxyEnvEnabled: proxyEnvEnabled(),
-          proxyEnv: proxyEnvReport(),
-          certificateTrust: enableSystemCACertificates(),
           direct,
-          proxied,
-          suggestion,
-          conclusion: verdict.conclusion,
-          severity: verdict.severity,
+          conclusion: reachable ? "direct" : "none",
+          severity: reachable ? "ok" : "error",
         },
         null,
         2,
@@ -762,93 +656,10 @@ async function commandNet(args = []) {
     return;
   }
 
-  log(
-    formatNetworkReport({
-      hosts,
-      direct,
-      proxied,
-      suggestion,
-      proxy: config.proxy,
-      resolved,
-      systemRead,
-      verdict,
-    }),
-  );
-}
-
-/** Wraps a bare result array in the shape `describeProbeVerdict` expects. */
-function asProbeRun(results) {
-  if (!Array.isArray(results)) return null;
-  return { results, reachable: results.length > 0 && results.every(probeSucceeded) };
-}
-
-/**
- * Probes through the Windows system proxy without saving or changing anything.
- *
- * Reached only when the configured mode resolved to no proxy and a direct
- * connection failed, so the report can name the one setting that would work
- * instead of leaving the user to guess. A machine with no system proxy returns
- * null without spawning a child.
- */
-async function probeSystemProxySuggestion(hosts) {
-  const systemRead = await readWindowsSystemProxy();
-  const resolved = buildProxyVars({ mode: "system", url: null, noProxy: "" }, systemRead);
-  if (!resolved.vars) return null;
-  return probeThroughProxy(hosts, resolved.vars);
-}
-
-/**
- * Spawns the same command in a child process with the resolved proxy variables,
- * because `NODE_USE_ENV_PROXY` is only honoured at Node start-up.
- */
-async function probeThroughProxy(hosts, proxyVars) {
-  const launch = serviceSpec("net", [NET_PROBE_FLAG, ...hosts.flatMap((host) => ["--host", host])]);
-  try {
-    const { stdout } = await execFileAsync(launch.command, launch.args, {
-      cwd: launch.cwd,
-      env: proxyChildEnv({ proxyVars }),
-      encoding: "utf8",
-      timeout: 60000,
-      windowsHide: true,
-    });
-    const text = stdout.trim().split(/\r?\n/).filter(Boolean).pop() ?? "";
-    const parsed = JSON.parse(text);
-    return Array.isArray(parsed.results) ? parsed.results : [];
-  } catch (error) {
-    return [{ host: "代理模式", dnsError: describeErrorChain(error), addresses: [], error: null, httpStatus: null }];
-  }
+  log(formatNetworkReport({ hosts, direct }));
 }
 
 async function commandConfigure(args = []) {
-  // `flagValue` answers null when the flag is absent, so the comparisons below
-  // must be against null: testing against undefined would treat a missing flag as
-  // a supplied one and reset the proxy mode on every unrelated `configure` call.
-  const proxyMode = flagValue(args, "--proxy-mode");
-  const proxyUrl = flagValue(args, "--proxy-url");
-  const legacyProxyIndex = args.indexOf("--use-env-proxy");
-
-  if (proxyMode !== null || proxyUrl !== null || legacyProxyIndex >= 0) {
-    const current = await loadAppConfig(DATA_DIR);
-    let mode = current.proxy.mode;
-    if (proxyMode !== null) {
-      mode = normalizeProxyMode(proxyMode);
-    } else if (legacyProxyIndex >= 0) {
-      // v1.0.0's boolean flag still works: on -> env, off -> off.
-      mode = normalizeUseEnvProxy(args[legacyProxyIndex + 1]) ? "env" : "off";
-    }
-    const url = proxyUrl !== null ? normalizeProxyUrl(proxyUrl) : current.proxy.url;
-    const next = await saveAppConfig(DATA_DIR, {
-      proxy: { mode, url, noProxy: current.proxy.noProxy },
-    });
-    log(`代理模式已设为「${PROXY_MODE_LABELS[next.proxy.mode] ?? next.proxy.mode}」（${configPath(DATA_DIR)}）`);
-    if (next.proxy.url) log(`代理地址: ${redactProxyUrl(next.proxy.url)}`);
-    if (next.proxy.mode === "manual" && !next.proxy.url) {
-      log("注意: 手动模式还没有填写代理地址，请执行 configure --proxy-url host:port");
-    }
-    log("正在运行的 daemon 需要 restart 才会生效。");
-    return;
-  }
-
   if (args.includes("--clear")) {
     await saveAppConfig(DATA_DIR, { traeExe: null });
     log(`已清除配置中的 TRAE 路径（${configPath(DATA_DIR)}）`);
@@ -859,8 +670,6 @@ async function commandConfigure(args = []) {
   if (!raw) {
     log('用法: configure --trae-exe "D:\\路径\\TRAE SOLO CN.exe"');
     log("      configure --clear");
-    log("      configure --proxy-mode system|manual|env|off");
-    log("      configure --proxy-url 127.0.0.1:7890");
     process.exitCode = 2;
     return;
   }
@@ -923,13 +732,6 @@ async function waitForEnter() {
  * `TraeEnhancer.exe`.
  */
 async function main() {
-  // Before any command that can reach the network. See system-ca.js: behind a
-  // proxy that decrypts TLS, every request fails without this while TRAE itself
-  // works, because Chromium reads the Windows certificate store and Node does
-  // not. This widens the trusted roots to that same set; it is not a
-  // verification bypass.
-  enableSystemCACertificates();
-
   const { hasCommand, command, rest } = parseServiceArgs(process.argv);
   const handler = COMMANDS[command];
 

@@ -1,290 +1,158 @@
-# TRAE SOLO CN Enhancer
+# TRAE SOLO CN 增强助手
 
-A local, non-invasive enhancement assistant for `TRAE SOLO CN`.
+一个面向 Windows 的本地多账号增强助手，用于管理 `TRAE SOLO CN` 账号、切换登录、自动签到、导入导出和登录信息维护。
 
-The current release notes are in
-[`docs/releases/v1.0.0.md`](docs/releases/v1.0.0.md).
+当前发布分支：`release/v1.0.1`。
+当前开发版本：`1.0.1`。
 
-The project provides:
+> 本发布分支不包含代理功能。代理实现保存在独立的 `feature/proxy-support` 分支，发布包只使用直连网络。
 
-- a Windows launcher that starts TRAE SOLO CN with a loopback CDP port;
-- a local daemon that injects a compact panel into the TRAE renderer;
-- safe backup of the current account authentication snapshot;
-- account listing without exposing authentication tokens.
+## 功能
 
-The account suite also supports:
+- 本地保存 TRAE 认证快照，不修改 TRAE 安装目录，不修改 `app.asar`。
+- 一键切换已保存账号，切换过程使用事务式文件替换，失败时自动回滚。
+- 支持无感登录：浏览器完成授权后，新账号自动加入列表，并立即同步套餐、余额与签到状态。
+- 支持传统“假退出”登录：备份当前账号后进入 TRAE 登录页，登录成功后自动保存新账号。
+- 账号导出使用用户密码加密，导入不会自动切换当前账号。
+- 自动签到支持 15、30、60、120 分钟间隔，并为每个账号使用独立的 `userId` 作为设备标识。
+- 自动维护登录信息：只在临近到期时更新，平时复用现有凭据，降低把其他设备顶下线的概率。
+- 面板可以查看每个账号的手机号、套餐、余额、签到状态和登录信息有效期。
+- 非当前账号支持删除本地备份；当前正在使用的账号受到保护。
+- 设置页按“签到 / 更新 / 维护”分组，避免所有配置堆在同一页。
+- 关于页改为面向普通用户的添加、切换、迁移和数据安全说明。
 
-- one-click switching with an expiry-checked, transactional restart flow and automatic
-  rollback when TRAE rejects the selected account;
-- seamless login in the system browser without closing TRAE;
-- traditional fake logout that backs up the current account, keeps non-authentication
-  state, reopens TRAE at the login page, and saves the new account automatically.
-- encrypted account export and import using scrypt plus AES-256-GCM, with deduplication
-  by account identity and no automatic account switching during import.
-- automatic check-in for every saved account, on an interval you choose (15, 30, 60 or
-  120 minutes). Check-in uses each account's own stable user id as its request device
-  id, so one account does not consume another account's daily check-in slot.
-- the account signed in when TRAE first connects is adopted automatically, so a fresh
-  install never opens on an empty list waiting for you to add one by hand.
-- automatic account keep-alive. Every six hours each inactive account has its usage
-  re-read, and its credential is exchanged **only when it is about to expire** — the
-  access token with under a day left, or the refresh token under a month. The panel
-  shows that expiry instead of a vague "keep-alive" state. The active account is
-  synchronized from the running TRAE session instead of rotating its refresh token.
-  Keep-alive is skipped while Cockpit Tools is running to avoid conflicting rotations.
+## 快速开始
 
-Authentication backups are stored locally under `data/accounts`. Only account-scoped
-`iCube*` keys are replaced or cleared; workspaces, settings, extensions, and window
-state are preserved. Rollback state for account operations is held in memory and does
-not leave raw `storage.json` copies in a transaction directory.
+安装版使用开始菜单或桌面快捷方式启动。快捷方式会通过 `scripts\launch-hidden.vbs` 启动完整链路：
 
-Exported account files always contain an encrypted envelope. Passwords are never
-written to disk or included in the export.
+1. 启动 TRAE SOLO CN，并打开本地 CDP 端口。
+2. 启动本地守护进程。
+3. 在 TRAE 渲染进程中注入增强助手面板。
 
-## Getting started
-
-In a packaged build, use the shortcut the installer created. It points at
-`scripts\launch-hidden.vbs`, which starts the whole chain with no console window:
-the bundled executable is a console-subsystem program, so launching it directly
-always opens one. Only the launch entries are hidden. A command such as `stop` keeps
-its console on purpose, because you asked for something to happen and should see it
-reported.
-
-The launcher also reports a missing executable in a dialog box, with the path it
-looked in. A shortcut that silently does nothing is indistinguishable from one that
-never ran, and the usual cause — antivirus quarantining the executable, or a partial
-extraction — is then impossible to diagnose. The logon entry deliberately stays
-silent instead, since a modal box at every logon would be worse than the silence.
-
-To run it by hand, or to read the output, use the service CLI:
+也可以使用命令行：
 
 ```powershell
-node scripts\service.js start      # launch TRAE with CDP, the daemon, and the panel
-node scripts\service.js daemon     # ensure the background service only
-node scripts\service.js status     # show what is running right now
-node scripts\service.js stop       # stop the supervisor and the daemon
+node scripts\service.js start
+node scripts\service.js daemon
+node scripts\service.js status
+node scripts\service.js stop
 ```
 
-| Command | What it does |
+## 命令
+
+| 命令 | 作用 |
 | --- | --- |
-| `start` | Launches the full chain: TRAE with CDP, the daemon, and panel injection. |
-| `daemon` | Brings the daemon up now, then starts the supervisor that keeps it alive. |
-| `stop` | Stops the supervisor and the daemon by their exact pids. |
-| `restart` | `stop` followed by `daemon`. |
-| `status` | Prints daemon, CDP, supervisor, autostart, and endpoint state. |
-| `locate` | Shows where TRAE was found and every location that was probed. |
-| `configure` | Saves the TRAE path, or sets the proxy mode and address. |
-| `net` | Probes the required hosts directly and through the configured proxy. |
-| `install` | Registers the logon autostart entry (background service only). |
-| `uninstall` | Removes the logon autostart entry. |
-| `tray` | Starts the tray icon host. |
-| `tray-stop` | Stops the tray icon host by its exact pid. |
-| `logs` | Prints the tail of `logs\daemon.log` and `logs\watchdog.log`. |
+| `start` | 启动 TRAE、CDP、后台服务和面板注入。 |
+| `daemon` | 只确保后台服务运行，并启动守护进程。 |
+| `stop` | 根据精确 PID 停止守护进程和后台监督进程。 |
+| `restart` | 先执行 `stop`，再执行 `daemon`。 |
+| `status` | 显示服务、CDP、后台监督、自启动和端口状态。 |
+| `locate` | 显示 TRAE 路径以及探测过程。 |
+| `configure` | 保存或清除 TRAE 可执行文件路径。 |
+| `net` | 直接探测项目所需域名，不读取或修改系统代理。 |
+| `install` | 注册登录时自动启动后台服务。 |
+| `uninstall` | 移除登录时自启动。 |
+| `tray` | 启动托盘入口。 |
+| `tray-stop` | 停止托盘入口。 |
+| `logs` | 查看守护进程和后台监督日志。 |
 
-`stop` never terminates a process group. It reads the daemon pid from
-`/api/health` and the supervisor pid from `data/watchdog.pid`, confirms each pid
-is one of this project's own process images, and then stops that single pid.
+`stop` 只停止项目自己的进程，不会批量结束 Node、Electron 或 TRAE 进程。
 
-## Settings
+## 账号管理
 
-The injected panel has a **设置** tab covering the two options that make the
-assistant behave the same way on an intranet machine as TRAE itself does. Both are
-also reachable from the CLI.
+账号认证快照保存在本机的 `data\accounts` 下。切换账号时只替换账号相关的 `iCube*` 状态，工作区、窗口状态、扩展和其他 TRAE 设置保持不变。
 
-### Network proxy
+面板中的“登录”提供两种方式：
 
-TRAE renders with Chromium and therefore follows the Windows system proxy, while the
-daemon's `fetch` reads neither the registry nor `HTTP_PROXY` unless it is told to.
-On a machine where only the system proxy is configured, that difference shows up as
-"TRAE works, the assistant cannot reach `api.trae.cn`".
+- **无感登录**：在浏览器完成授权，不退出 TRAE。登录成功后，新账号会立即出现在账号列表，并同步套餐、余额、签到状态和登录信息有效期。
+- **假退出**：先备份当前账号，再让 TRAE 进入登录页。登录成功后自动保存新账号。
 
-The panel offers three choices. A fourth mode, `env` (read `HTTP_PROXY` from the
-environment), still exists in `config.json` because v1.0.0 configurations migrate
-into it, but it is not offered in the UI and is only shown while it *is* the current
-value.
+导入导出是账号迁移，不是多设备共享。原设备继续刷新登录信息后，另一台设备上的副本可能失效并出现 401，需要重新登录。导出文件始终需要密码加密。
 
-| Mode | What it does |
-| --- | --- |
-| `system` (default) | Reads `HKCU\...\Internet Settings` and follows it. With no system proxy configured this resolves to nothing, so it behaves exactly like `off`. |
-| `manual` | One proxy address you supply, for machines that only publish a PAC script or need a fixed proxy. |
-| `off` | Never use a proxy. |
+## 设置
+
+### 签到
+
+- 自动签到可开启或关闭。
+- 支持固定间隔：15、30、60、120 分钟。
+- 支持 TRAE 重启后立即补签。
+- 今天已经签到的账号会跳过，不会重复领取。
+
+### 更新
+
+- 默认禁止 TRAE 自动更新，避免更新过程打断当前会话。
+- 关闭自动更新后，仍然可以在 TRAE 菜单中手动检查更新。
+- 修改 `update.mode` 只定点写入 TRAE 的 `User\settings.json`，会保留注释和其他设置。
+
+### 维护
+
+- 可以单独重启增强助手的后台服务。
+- 重启不会退出 TRAE，也不会修改当前登录账号。
+
+## 数据与安全
+
+- 本地服务只监听 `127.0.0.1`。
+- 日志会过滤 token、JWT、授权头和敏感查询参数。
+- 不记录访问令牌、刷新令牌、Cookie、私钥或完整认证快照。
+- 导出文件使用 scrypt 和 AES-256-GCM 加密。
+- 删除账号只删除本地备份，不会退出 TRAE 当前登录。
+- 当前正在使用的账号不允许删除。
+
+## 安装包和便携版
+
+构建便携版：
 
 ```powershell
-TraeEnhancer.exe configure --proxy-mode manual --proxy-url 127.0.0.1:7890
-TraeEnhancer.exe configure --proxy-mode system
-TraeEnhancer.exe net
+npm install
+npm run build:exe
 ```
 
-A proxy address is stored without credentials: `data/config.json` is plain JSON, so a
-password written there would be an unencrypted secret. A proxy that needs
-authentication has to be set as the Windows system proxy instead, where the operating
-system holds the credentials. A URL that embeds a username or password is refused.
-
-**HTTP proxies only.** Node's environment-proxy support accepts `http:` and `https:`
-and nothing else. A SOCKS address is not merely ignored: it makes the process throw
-before it can start, so every path that produces proxy variables — the config layer,
-the manual mode, and the environment mode — rejects it. A `socks5://` value found in
-`HTTP_PROXY` is dropped and reported rather than passed on.
-
-Only a PAC script and no proxy server is reported as such rather than guessed at:
-Node cannot evaluate a PAC file, and the panel points at the manual mode instead.
-
-**Saving is not applying.** Node reads its proxy configuration once, when it starts,
-so both the panel and the CLI report that a restart is required and the panel offers
-the restart. The restart is performed by a detached helper that waits for the old
-process to exit, so the two never contend for the listening port.
-
-### TRAE automatic updates
-
-TRAE checks for updates every 60 minutes by default and requires a restart when one
-is found, which interrupts whatever the assistant is doing. The settings tab writes
-`update.mode: "manual"` into `%APPDATA%\TRAE SOLO CN\User\settings.json`, which stops
-the automatic checks entirely; manual checks from TRAE's own menu still work.
-
-- Only that single entry is touched. The file is JSONC and is edited as text, so
-  comments and formatting survive, and every other setting is left byte-identical.
-- The previous value is remembered, and "允许自动更新" restores it.
-- The file is copied to `settings.json.trae-enhancer.bak` before the first change, and
-  a failed write restores it.
-- The change takes effect when TRAE restarts.
-
-TRAE's separately pushed `forceUpdate` configuration is not affected by this setting.
-
-## Background service and autostart
-
-The supervisor (`scripts/watchdog.js`) polls `/api/health` every 15 seconds.
-After three consecutive failures it starts the daemon again, with a 60-second
-cooldown so a permanently broken daemon is not respawned in a tight loop. It only
-ever *starts* processes; it never kills anything.
-
-That three-failure threshold is deliberately conservative: it prevents flapping
-and keeps the supervisor from racing a daemon that is already booting. It is
-therefore *not* used for the first bring-up. `service daemon` starts the daemon
-directly and only then hands supervision over, so the command reports the real
-state instead of waiting out a recovery threshold.
-
-`node scripts\service.js install` registers a logon autostart entry. It is
-deliberately minimal:
-
-- the entry lives in your own Startup folder, so you can delete it yourself and
-  no administrator rights are involved;
-- it starts the background service only. TRAE is still launched through
-  `start`, so nothing pops up at logon.
-
-## Tray
-
-`node scripts\service.js tray` starts the tray host. The host is a Windows
-PowerShell `NotifyIcon` script that drives the same service CLI, so it adds no
-runtime dependency. The menu is generated from `data\tray-config.json`.
-
-Two encoding rules make this portable across non-ASCII install paths, and both
-are enforced by tests:
-
-- `scripts\tray.ps1` and `scripts\trae-enhancer.cmd` are pure ASCII, because
-  PowerShell 5.1 reads `.ps1` as ANSI and `cmd.exe` reads `.cmd` as OEM. All
-  display strings live in the UTF-8 JSON file instead.
-- the project path is never written into those files. The autostart helper
-  resolves it from its own location at runtime, and the shortcut is created
-  through COM, which stores paths as UTF-16.
-
-## Building the Windows installer
+构建安装包：
 
 ```powershell
-npm run build:exe          # the installer packages this output
 npm run build:installer
 ```
 
-The installer build needs Inno Setup 6 (`ISCC.exe`). It is found automatically
-under `%LOCALAPPDATA%\Programs\Inno Setup 6`, or through the `INNO_SETUP_ISCC`
-environment variable. The output is `dist\installer\TraeEnhancer-Setup-<version>.exe`.
+安装包输出目录为 `dist\installer`，便携版输出目录为 `dist\portable`。
 
-What the installer does:
+安装包当前未签名，Windows SmartScreen 可能显示警告。
 
-- installs per user under `%LOCALAPPDATA%\Programs`, with no administrator rights,
-  and keeps the directory page enabled so the install location can be changed;
-- asks the user to confirm the TRAE SOLO CN executable on a dedicated page that
-  follows the directory page. Detection reads the uninstall registry entries,
-  matched strictly on `TRAE SOLO CN` — a looser `TRAE` match also picks up the
-  unrelated "Trae CN" IDE — plus a list of well-known directories. A
-  "use the detected path" button appears when it differs from the saved one;
-- hands the chosen path to `TraeEnhancer.exe configure --trae-exe <path>` as a
-  command line argument. This is deliberate: subprocess stdout is UTF-8 while the
-  installer decodes pipes with the system ANSI code page, so a path must never be
-  read back through a pipe;
-- offers optional tasks for a desktop shortcut and for registering the logon
-  autostart of the background service;
-- on uninstall, asks whether to keep user data. `data\` holds the account
-  snapshots and the API token, so deleting it is irreversible; choosing cancel
-  aborts the whole uninstall.
+## 升级和卸载
 
-`scripts\win\ChineseSimplified.isl` is the community Simplified Chinese
-translation collected at <https://jrsoftware.org/files/istrans/> and is used
-exactly as published.
+- 覆盖运行新版安装包即可升级，账号数据会保留。
+- 便携版升级时先停止服务，再替换程序文件，保留原 `data\` 目录。
+- 卸载时会询问是否保留 `data\`。账号快照和本地 API token 都在其中，删除后不可恢复。
 
-## Updating and reinstalling
+## 故障排查
 
-Run a newer installer over the existing installation. The installer uses a stable
-`AppId`, reuses the previous install directory and task choices, and asks the old
-`TraeEnhancer.exe` to stop before replacing any files. Account data under `data\`
-is not touched by an upgrade.
-
-For a portable copy, stop the service first, replace the portable folder contents,
-and keep the existing `data\` directory. The project does not yet implement an
-online auto-updater; updates are applied by running the newer installer or copying
-a newer portable build.
-
-## Troubleshooting a failure on another machine
-
-Start with the built-in network probe:
+先检查后台服务状态：
 
 ```powershell
-TraeEnhancer.exe net
+node scripts\service.js status
 ```
 
-It resolves and contacts every host the project needs, first directly and then
-through the configured proxy, and prints the conclusion. A failing step is
-reported with its full `cause` chain (`ECONNREFUSED`, `ENOTFOUND`, a certificate
-error) instead of the bare `fetch failed` that Node produces on its own.
-
-The panel's **设置** tab runs the same comparison for a candidate configuration
-before you save it, so "should this machine use a proxy" can be answered on the
-machine itself rather than inferred.
-
-If the conclusion is that the proxy is required:
+网络异常时运行直连探测：
 
 ```powershell
-TraeEnhancer.exe configure --proxy-mode system      # follow the Windows system proxy
-TraeEnhancer.exe configure --proxy-mode manual --proxy-url 127.0.0.1:7890
-TraeEnhancer.exe restart
+node scripts\service.js net
 ```
 
-Two details matter here:
+该命令只做 DNS 和 HTTPS 直连探测。失败时会显示完整的 `cause` 链，例如 `ECONNREFUSED`、`ENOTFOUND` 或证书错误。
 
-- Node's `fetch` **ignores** `HTTP_PROXY` / `HTTPS_PROXY` unless the process is
-  started with environment proxy support. That is read at start-up only, so it is
-  injected into the daemon's spawn environment rather than set at runtime — and a
-  saved change needs the restart above.
-- `NO_PROXY` always keeps loopback out of the proxy. The service, the supervisor,
-  and the CDP endpoint are all local.
-
-Proxy variable values are never printed or logged, because a proxy URL may embed
-credentials.
-
-Then read the daemon log, which records the reason for every failed remote call:
+查看日志：
 
 ```powershell
-TraeEnhancer.exe logs
+node scripts\service.js logs
 ```
 
-`logs\daemon.log` is written through a redaction filter, so tokens, JWTs,
-authorization headers and secret query values cannot reach it.
+本发布分支没有代理设置。如果所在网络必须通过代理访问 TRAE，代理实现请使用 `feature/proxy-support` 分支。
 
-## Development
+## 开发
 
-Requirements:
+环境要求：
 
-- Windows 10 or 11
-- Node.js 22 or newer
+- Windows 10 或 Windows 11
+- Node.js 22 或更高版本
 
 ```powershell
 npm test
@@ -292,82 +160,18 @@ npm run check
 npm start
 ```
 
-`npm run check` syntax-checks every file under `src/` and `scripts/`.
+默认本地服务地址：`http://127.0.0.1:47834`。
+默认 CDP 地址：`127.0.0.1:9334`。
 
-The default local service is `http://127.0.0.1:47834`.
+## 发布
 
-## Building the portable executable
+发布前至少完成：
 
 ```powershell
-npm install
+npm test
+npm run check
 npm run build:exe
+npm run build:installer
 ```
 
-This produces `dist\portable\`, which is self-contained and needs no Node.js
-installation on the target machine:
-
-```
-dist\portable\
-  TraeEnhancer.exe
-  scripts\launch-hidden.vbs   the shortcut target: starts everything with no console
-  scripts\trae-enhancer.cmd
-  scripts\tray.ps1
-  README.md
-  data\          created on first run
-```
-
-The executable embeds its own runtime, so it is roughly the size of `node.exe`
-itself (about 83 MB and up). `npm run build:exe` verifies its own output: the
-preparation blob must contain the renderer script marker, and the produced
-executable must answer `status`.
-
-Two constraints shape the build and must not be broken:
-
-- Node 22 single-executable applications only accept a **CommonJS** entry, so
-  the ESM tree is bundled with esbuild first. `import.meta` therefore cannot be
-  used in bundled code; `src/lib/app-paths.js` is the only module that reads it,
-  and the build injects `__APP_BUNDLE_ROOT__` for the bundled case.
-- a single executable cannot load sibling scripts from disk, so the renderer
-  script is embedded as a SEA asset and the daemon, the supervisor, and the
-  service CLI are re-entered through an internal argv switch.
-
-## Automatic jobs
-
-- Check-in runs a sweep five seconds after daemon startup, then every 15, 30, 60 or 120
-  minutes — 30 by default, changeable in 设置 → 自动签到. Each account is claimed at
-  most once per Asia/Shanghai calendar day.
-- When TRAE connects, the daemon runs one check-in as well, so restarting TRAE
-  mid-session is covered immediately instead of waiting for the next interval.
-- Turning automatic check-in off stops those two runs only. Opening the panel still
-  reconciles today's state, and the 「立即签到」 button still works: those are actions you
-  take, not background runs.
-- Keep-alive sweeps every 30 minutes. Each inactive account is processed at most once
-  every six hours (30-minute retry after a failure) to refresh credits; the credential
-  itself is exchanged **only on expiry** — access token under a day left, refresh token
-  under a month. A credential with days left is used as-is, because exchanging it would
-  invalidate every other device holding the same chain.
-- The active account is synchronized from the running TRAE storage. Its refresh
-  token is not rotated from the stored backup.
-- Rotating a refresh token invalidates whoever still holds the old one — including a
-  copy you exported to another machine. Expiry-driven rotation makes that rare (roughly
-  every 11–14 days per account instead of four times a day) but cannot eliminate it:
-  two machines managing one account will always take turns kicking each other out. Treat
-  an export as a **migration**, not a shared copy.
-- A rotation additionally requires TRAE to be known *not* to be signed in as a managed
-  account. If the live account cannot be read at all, the entire sweep is skipped and
-  the reason is logged, rather than rotating blind. TRAE holding an account outside the
-  saved list is fine and blocks nothing.
-- Automatic check-in and keep-alive are skipped while Cockpit Tools is running.
-- The Cockpit Tools test tries `tasklist` first and PowerShell second. If neither can
-  answer, check-in still runs but credential rotation is refused and keep-alive is
-  skipped, and the reason is written to `logs\daemon.log` — a probe failure must never
-  silently cancel a sweep.
-- Opening the panel reconciles check-in state with the server and refreshes credits.
-  That call is idempotent: an account already checked in is recorded without claiming
-  a second reward. The daemon pushes an event over CDP after every state change, so an
-  open panel updates itself; there is no polling loop.
-
-Set `TRAE_ENHANCER_AUTO_CHECKIN=0` or `TRAE_ENHANCER_AUTO_KEEPALIVE=0` to disable
-the corresponding scheduler. Keep-alive timing can be overridden with
-`TRAE_ENHANCER_KEEPALIVE_INTERVAL_MS` and
-`TRAE_ENHANCER_KEEPALIVE_RETRY_INTERVAL_MS`.
+然后生成安装包、便携 ZIP 和 SHA256 校验文件。后续 git 提交信息和发布更新说明统一使用中文。

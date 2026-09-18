@@ -1,18 +1,15 @@
 /**
- * Diagnostics for network failures and for anything that must not leak secrets
- * into logs or reports.
+ * Direct network diagnostics and secret-safe error formatting.
  *
- * Node hides the real reason for a transport failure in `error.cause`, so the
- * default `error.message` is only ever the useless string "fetch failed". Every
- * helper here exists to turn that back into an actionable code such as
- * `ECONNREFUSED`, `ENOTFOUND` or a certificate error.
+ * The release build deliberately has no proxy configuration. This module only
+ * performs direct DNS/HTTPS probes and removes secret query values before text
+ * can reach a log or report.
  */
 import dns from "node:dns/promises";
 
-/** Query parameters whose values must never be printed. */
 const SECRET_QUERY = /([?&](?:did|token|access_token|refresh_token|code|password|secret|apikey|api_key|key)=)[^&\s"']+/gi;
 
-/** Proxy variables that Node's `--use-env-proxy` understands. */
+/** Environment variables that could make a child inherit an ambient proxy. */
 const PROXY_NAMES = [
   "HTTP_PROXY",
   "HTTPS_PROXY",
@@ -29,9 +26,6 @@ export function redactQueryValues(text) {
   return text.replace(SECRET_QUERY, "$1<redacted>");
 }
 
-/**
- * The URL with every query value removed, safe to print or log.
- */
 export function redactUrl(value) {
   try {
     const url = new URL(String(value));
@@ -54,10 +48,6 @@ function causeFields(error) {
   return fields;
 }
 
-/**
- * Walks the whole `cause` chain and returns one compact line, for example
- * `fetch failed | ECONNREFUSED | connect ECONNREFUSED 127.0.0.1:9`.
- */
 export function describeErrorChain(error, { maxDepth = 4 } = {}) {
   if (!error) return "unknown error";
   const parts = [];
@@ -72,46 +62,20 @@ export function describeErrorChain(error, { maxDepth = 4 } = {}) {
     if (segment && !parts.includes(segment)) parts.push(segment);
     current = current.cause;
   }
-  const text = parts.join(" → ") || String(error);
-  return redactQueryValues(text);
+  return redactQueryValues(parts.join(" → ") || String(error));
 }
 
 /**
- * Reports whether proxy variables are present without ever revealing their
- * values: a proxy URL may embed credentials.
+ * Removes inherited proxy controls before spawning a child that should use a
+ * direct connection. The release build does not expose proxy configuration.
  */
-export function proxyEnvReport(env = process.env) {
-  const report = [];
-  const seen = new Set();
-  for (const name of PROXY_NAMES) {
-    const key = name.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const value = env?.[name];
-    report.push({
-      name,
-      set: typeof value === "string" && value.trim().length > 0,
-    });
-  }
-  return report;
+export function stripProxyEnv(env = process.env) {
+  const next = { ...env };
+  delete next.NODE_USE_ENV_PROXY;
+  for (const name of PROXY_NAMES) delete next[name];
+  return next;
 }
 
-/** Whether this process was started with environment proxy support. */
-export function proxyEnvEnabled(env = process.env) {
-  const value = env?.NODE_USE_ENV_PROXY;
-  if (typeof value !== "string") return false;
-  const normalized = value.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
-
-export function anyProxyConfigured(env = process.env) {
-  return proxyEnvReport(env).some((entry) => entry.set && !entry.name.toLowerCase().startsWith("no_proxy"));
-}
-
-/**
- * DNS, then an HTTPS request. A failure at either step is reported with its full
- * cause chain instead of being swallowed.
- */
 export async function probeHost(hostname, { path: targetPath = "/", timeoutMs = 10000 } = {}) {
   const result = {
     host: hostname,
@@ -142,78 +106,11 @@ export async function probeHost(hostname, { path: targetPath = "/", timeoutMs = 
 
 export async function probeHosts(hosts, options = {}) {
   const results = [];
-  for (const host of hosts) {
-    results.push(await probeHost(host, options));
-  }
+  for (const host of hosts) results.push(await probeHost(host, options));
   return results;
 }
 
-/** Hosts this project needs, independent of any account. */
 export const STATIC_HOSTS = ["api.trae.cn", "api.trae.com.cn", "www.trae.cn"];
-
-const LOOPBACK_NO_PROXY = ["127.0.0.1", "localhost", "::1"];
-
-/**
- * Loopback must never be sent through a proxy. Our own service, the supervisor
- * and the CDP endpoint are all local, and routing them through a proxy would
- * break the parts that currently work.
- */
-export function ensureLocalNoProxy(existing) {
-  const entries = typeof existing === "string"
-    ? existing.split(",").map((entry) => entry.trim()).filter(Boolean)
-    : [];
-  for (const entry of LOOPBACK_NO_PROXY) {
-    if (!entries.includes(entry)) entries.push(entry);
-  }
-  return entries.join(",");
-}
-
-/**
- * Environment for a child process that talks to the network.
- *
- * `proxyVars` is the result of `system-proxy.js`'s `resolveProxyVars`, so this
- * function stays pure and the mode logic lives in one place.
- *
- * `NODE_USE_ENV_PROXY` is only read when Node starts, so it cannot be enabled by
- * mutating `process.env` at runtime: it has to be present in the spawn
- * environment of every process that performs fetches. That is why every spawner
- * of the daemon resolves the proxy first.
- *
- * A null `proxyVars` means "nothing resolved", and the environment is passed
- * through unchanged. That is safe because `NODE_USE_ENV_PROXY` is then absent
- * too, so Node ignores whatever proxy variables the ambient environment holds.
- */
-export function proxyChildEnv({ proxyVars = null, env = process.env } = {}) {
-  const next = { ...env };
-  if (!proxyVars) return next;
-  next.NODE_USE_ENV_PROXY = "1";
-  for (const [name, value] of Object.entries(proxyVars)) {
-    if (name.toLowerCase() === "no_proxy") continue;
-    next[name] = value;
-  }
-  next.NO_PROXY = ensureLocalNoProxy(proxyVars.NO_PROXY ?? env.NO_PROXY ?? env.no_proxy);
-  // A stale lowercase variable from the ambient environment would otherwise be
-  // picked up by some clients and bypass the configured proxy.
-  for (const stale of ["http_proxy", "https_proxy"]) delete next[stale];
-  return next;
-}
-
-/**
- * Environment with every proxy variable removed, including `NODE_USE_ENV_PROXY`.
- *
- * Used when a child must start a *fresh* proxy resolution rather than inherit the
- * parent's. Restarting the daemon is the case that matters: the process spawning
- * the helper was itself started with `NODE_USE_ENV_PROXY=1` and the old proxy
- * variables, so passing that environment on would make a change to "no proxy"
- * silently keep using the previous proxy. It is also what makes a direct network
- * probe genuinely direct.
- */
-export function stripProxyEnv(env = process.env) {
-  const next = { ...env };
-  delete next.NODE_USE_ENV_PROXY;
-  for (const name of PROXY_NAMES) delete next[name];
-  return next;
-}
 
 const MAX_LISTED_ADDRESSES = 3;
 
@@ -238,106 +135,4 @@ export function formatProbeLine(result) {
 
 export function probeSucceeded(result) {
   return Boolean(result) && result.error === null && Number.isInteger(result.httpStatus);
-}
-
-/* -------------------------------------------------------------------------- *
- * Failure classification
- *
- * A probe that only ever says "unreachable" cannot tell an intranet user what to
- * do next, and a wrong hint is worse than none: a certificate rejection used to
- * be reported as "check the proxy address", sending people to re-check a value
- * that was already correct. These helpers name the reason so the verdict can
- * name the fix.
- * -------------------------------------------------------------------------- */
-
-/** TLS failures that mean the chain was rejected, not that nothing answered. */
-const CERTIFICATE_FAILURES = [
-  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
-  "UNABLE_TO_GET_ISSUER_CERT",
-  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
-  "SELF_SIGNED_CERT_IN_CHAIN",
-  "DEPTH_ZERO_SELF_SIGNED_CERT",
-  "CERT_HAS_EXPIRED",
-  "ERR_TLS_CERT_ALTNAME_INVALID",
-];
-
-/** Most specific first: a certificate rejection proves something answered. */
-const FAILURE_PRIORITY = ["certificate", "auth", "refused", "dns", "timeout", "other"];
-
-/**
- * One keyword for a formatted error chain, or null when there is nothing to
- * explain. `text` is `describeErrorChain` output, not a raw Error.
- */
-export function classifyProbeFailure(text) {
-  if (typeof text !== "string" || !text) return null;
-  const upper = text.toUpperCase();
-  if (CERTIFICATE_FAILURES.some((code) => upper.includes(code))) return "certificate";
-  if (upper.includes("407") || upper.includes("PROXY AUTHENTICATION REQUIRED")) return "auth";
-  if (upper.includes("ECONNREFUSED")) return "refused";
-  if (upper.includes("ENOTFOUND") || upper.includes("EAI_AGAIN")) return "dns";
-  if (upper.includes("TIMEOUT") || upper.includes("ETIMEDOUT")) return "timeout";
-  return "other";
-}
-
-/** The most informative failure across every host of one probe run. */
-export function summarizeProbeFailure(results) {
-  const seen = new Set();
-  for (const result of results ?? []) {
-    const kind = classifyProbeFailure(result?.error);
-    if (kind) seen.add(kind);
-  }
-  return FAILURE_PRIORITY.find((kind) => seen.has(kind)) ?? null;
-}
-
-/**
- * Turns the probe runs into one conclusion a non-technical user can act on.
- *
- * `severity` exists so the panel never has to infer "is this bad?" from the
- * conclusion string: `ok` needs no action, `hint` is a fix the user can apply
- * themselves, `error` needs the details sent on.
- *
- * `suggestion` is a third run through the Windows system proxy, made only when
- * the configured mode resolved to nothing. Without it, an intranet user whose
- * saved mode is `off` would be told "unreachable" and left to guess that the
- * answer is a proxy they cannot see from inside the panel.
- */
-export function describeProbeVerdict({ direct, proxied, suggestion } = {}) {
-  if (direct?.reachable) {
-    return { conclusion: "direct", severity: "ok", text: "直连可以正常访问，网络没问题。" };
-  }
-  if (proxied?.reachable) {
-    return {
-      conclusion: "proxy",
-      severity: "ok",
-      text: "直连不通，但走这个代理可以访问 —— 保存这个配置就可以了。",
-    };
-  }
-  if (suggestion?.reachable) {
-    return {
-      conclusion: "system-proxy",
-      severity: "hint",
-      text: "直连不通；本机 Windows 上配置的代理可以正常访问。把上面的代理模式改成「跟随系统代理」再保存就可以了。",
-    };
-  }
-
-  // Nothing worked. Name the reason instead of blaming the one field that was
-  // already right.
-  const throughProxy = Array.isArray(proxied?.results) && proxied.results.length > 0;
-  const kind = summarizeProbeFailure(throughProxy ? proxied.results : direct?.results);
-  const reasons = {
-    certificate: throughProxy
-      ? "代理已经连上，但本机不信任对方使用的证书。助手默认会信任 Windows 证书存储里的证书，仍报这个错说明那张根证书没有装进系统。请把下面的详情发给排查方。"
-      : "连接在证书校验这一步失败，说明本机不信任对方使用的证书。请把下面的详情发给排查方。",
-    auth: "代理要求输入账号密码（407），当前版本不支持填写代理账号密码。请让内网代理放行本机的 IP 地址，或把详情发给排查方。",
-    refused: "代理拒绝了连接，代理地址或端口可能填错了。请核对代理地址。",
-    dns: "域名解析失败，请检查本机的 DNS 设置。",
-    timeout:
-      "连接超时。如果本机在公司内网，通常是因为需要走代理 —— 把上面的代理模式改成「跟随系统代理」再试一次。",
-    other: "连接不上，请把下面的详情发给排查方。",
-  };
-  return {
-    conclusion: kind ?? "none",
-    severity: "error",
-    text: reasons[kind ?? "other"],
-  };
 }

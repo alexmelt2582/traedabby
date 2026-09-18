@@ -85,11 +85,6 @@ every other setting stay untouched.
   into a `.cmd`, `.vbs`, or `.ps1` source file: create shortcuts through COM
   (UTF-16) and let generated scripts resolve the project root from their own
   location at runtime.
-- Only `http:` and `https:` proxy URLs may reach a child environment. Node's
-  environment-proxy support throws on anything else *before* the process can start, so
-  a SOCKS value surfaces as an unexplained startup crash. Validate at every producer:
-  the config layer, `buildProxyVars` for the manual mode, and `buildProxyVars` for the
-  environment mode. Report `unsupported-scheme`; never forward the value.
 - `scripts/trae-enhancer.cmd`, `scripts/tray.ps1`, `scripts/launch-hidden.vbs`, and
   every generated autostart script must stay pure ASCII with no BOM. Ask `assertAscii`
   from `src/lib/autostart.js` to enforce it, and keep Chinese display strings in
@@ -136,9 +131,9 @@ every other setting stay untouched.
   Never terminate all Node or Electron processes.
 - A restart is never performed in place. The daemon spawns
   `service daemon --wait-pid <its own pid>` detached and then exits, so the
-  replacement is started only after the listening port is free and with a freshly
-  resolved proxy configuration (`POST /api/daemon/restart`).
-- The settings tab inside the injected panel is the only UI for network and TRAE
+  replacement is started only after the listening port is free and with inherited
+  proxy environment controls removed (`POST /api/daemon/restart`).
+- The settings tab inside the injected panel is the only UI for check-in and TRAE
   update options. It inherits the panel's existing token auth and loopback port, so
   no new listener is opened.
 - The supervisor polls `/api/health` every 15 seconds, restarts the daemon after
@@ -217,53 +212,13 @@ every other setting stay untouched.
 - A transport failure must report its `cause` chain. Node hides the real reason
   (`ECONNREFUSED`, `ENOTFOUND`, a certificate error) inside `error.cause`, so a bare
   `fetch failed` is not an acceptable message.
-- Never print or log the *value* of a proxy variable; a proxy URL may embed
-  credentials. Report only whether it is set.
 - URLs that reach a message or a log must go through `redactUrl`: the check-in
   status query carries `did`, which is an account identifier.
-- `NODE_USE_ENV_PROXY` is read by Node at start-up only. It must be injected into a
-  child's spawn environment; setting `process.env` at runtime has no effect. It
-  defaults to off so a machine that currently connects directly is not broken.
-- The proxy mode defaults to `off` (connect directly): most installations are not on
-  an intranet, and no machine may have its network configuration changed on its
-  behalf. An intranet machine opts into `system` from the settings tab. `system` also
-  resolves to nothing where no proxy exists, so the two modes differ only where a
-  proxy actually does; the invariant to preserve is that no proxy is ever introduced
-  on a machine that has none.
-- Outbound processes call `enableSystemCACertificates()` (`src/lib/system-ca.js`)
-  before their first request. Node ignores the Windows certificate store, so behind a
-  proxy that decrypts TLS every call failed with `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`
-  while TRAE itself kept working, because Chromium reads that store. The fix widens
-  the default root set to Node's own roots plus the system store. It is a widening of
-  trust, never a verification bypass: `NODE_TLS_REJECT_UNAUTHORIZED` and
-  `rejectUnauthorized: false` are not acceptable substitutes, and
-  `test/system-ca.test.js` asserts neither ever appears.
-- The certificate fix uses the runtime API rather than the `--use-system-ca` flag: a
-  directly launched `TraeEnhancer.exe net` never inherits a spawn environment, and
-  that is precisely the machine that needs the fix.
-- `tls.getCACertificates("default")` cannot verify the merge. Measured on Node
-  22.22.2: the store holds 116 roots, node ships 144, the union is 203 after
-  de-duplication, and the default set reads back as 179 after installation — do not
-  write an assertion against that number.
-- When the configured mode resolves to no proxy and a direct probe fails, the probe
-  also tries the Windows system proxy without saving anything, so an intranet user
-  learns which setting to change. `describeProbeVerdict` classifies each failure —
-  certificate, 407, refused, DNS — because reporting a certificate rejection as
-  "check the proxy address" sends people to a field that was already correct.
-- A process that starts a *fresh* proxy resolution spawns its child with
-  `stripProxyEnv`, never with the environment it inherited. Otherwise the inherited
-  `NODE_USE_ENV_PROXY` and old proxy variables survive a change to "不使用代理".
-- Because the proxy is fixed at start-up, saving a proxy configuration must report
-  that a restart is required and offer the restart. Presenting a saved change as live
-  is the defect that produced the intranet report.
-- Loopback must always end up in `NO_PROXY`: `127.0.0.1`, `localhost`, `::1`. The
-  service, the supervisor, and the CDP endpoint are local and must never be routed
-  through a proxy.
-- `service net` is the first step when a remote call fails on another machine. It
-  compares a direct probe with a proxied one on the same host, and the settings tab
-  runs the same comparison for a candidate configuration before it is saved.
-- Never resolve a PAC (`AutoConfigURL`) by guessing. Node cannot evaluate one, so the
-  reason is reported and the user is pointed at the manual mode.
+- This release has no proxy configuration. Child processes that can reach the network
+  are spawned with `stripProxyEnv` so inherited proxy environment controls cannot
+  silently reintroduce a proxy path.
+- `service net` only performs direct DNS/HTTPS probes. It must not read or mutate
+  Windows proxy settings.
 
 ## TRAE Settings Invariants
 
@@ -289,6 +244,30 @@ every other setting stay untouched.
 - A change here takes effect when TRAE next starts. Never present it as live.
 - Server-pushed `forceUpdate` is out of scope: TRAE's own remote configuration can
   still require an update, and pretending otherwise would be a false promise.
+
+## Local Codex Runtime
+
+- On this Windows workspace, the built-in `apply_patch` tool and some sandboxed
+  shell launches can fail before running their command with
+  `fs sandbox helper failed ... setup refresh had errors`. Treat this as a failure
+  of the local Codex execution environment, not as evidence about the repository or
+  the code under test.
+- `.git` is intentionally a 17-byte file containing `gitdir: .git-meta`;
+  `.git-meta` is the real Git metadata directory. Do not move, delete, or recreate
+  `.git` as a repair attempt. It was tested once and did not resolve the runner
+  failure.
+- When a sandboxed process launch is rejected this way, retry the exact command with
+  escalation. Read-only commands that still run should be preferred first:
+  `rg`, `git log`, `git diff --stat`, and `git diff --check`.
+- If the built-in `apply_patch` tool remains unavailable, use the Codex executable's
+  `--codex-run-as-apply-patch` mode directly with the same
+  `*** Begin Patch ... *** End Patch` payload under escalation. The
+  `apply_patch.bat` wrapper may lose multiline arguments, so invoke the backing
+  `codex.exe` directly. Do not replace source edits with `Set-Content`, shell
+  redirects, or ad-hoc file rewriting.
+- After editing through this fallback, verify the change with `git diff --check`,
+  `npm test`, and `npm run check`; use an escalated `git status --short --branch`
+  when the sandboxed status command is still rejected.
 
 ## Workflow
 

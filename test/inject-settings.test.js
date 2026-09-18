@@ -70,10 +70,10 @@ test("every settings selector matches a class in the settings markup", () => {
   }
 });
 
-test("both restart buttons share the class the settings code wires up", () => {
+test("the maintenance panel owns the restart button the settings code wires up", () => {
   const markup = paneTemplate("settingsPane");
   const occurrences = markup.split('class="te-secondary te-daemon-restart"').length - 1;
-  assert.equal(occurrences, 2, "expected a restart button in both sections");
+  assert.equal(occurrences, 1, "expected one restart button in maintenance");
 });
 
 test("the pane is registered in the content area", () => {
@@ -136,9 +136,19 @@ test("the about pane's check-in line follows the saved settings", () => {
   assert.ok(body.includes("分钟检查"), "the enabled wording must name the real interval");
 });
 
-test("the empty state separates a failed adoption from having no accounts", () => {
-  const body = functionBody("function renderAccounts\\(accounts, currentAccountId\\)");
+test("the empty state separates a logged-out TRAE from a failed adoption", () => {
+  const body = functionBody(
+    "function renderAccounts\\(accounts, currentAccountId, currentAccountState\\)",
+  );
   assert.ok(body.includes("暂无账号备份"));
+  assert.ok(body.includes("TRAE 尚未登录"), "the logged-out state is not rendered");
   assert.ok(body.includes("adoptionError"), "the failure reason is never rendered");
   assert.ok(body.includes("te-adopt-retry"), "there is no way to retry after a failure");
+});
+
+test("opening the panel adopts only a signed-in account that is not managed yet", () => {
+  const body = functionBody("function openPanel\\(\\)");
+  assert.ok(body.includes("data?.accounts?.length === 0"));
+  assert.ok(body.includes('data.currentAccountState === "not-managed"'));
+  assert.ok(!body.includes("!data.currentAccountId"));
 });

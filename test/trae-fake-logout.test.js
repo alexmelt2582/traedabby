@@ -64,6 +64,7 @@ test("fake logout saves a newly logged-in account and preserves non-auth state",
   const context = await fixture();
   try {
     let starts = 0;
+    let syncedAccountId = null;
     const manager = new TraeFakeLogoutManager({
       ...context,
       stopTrae: async () => {},
@@ -76,6 +77,9 @@ test("fake logout saves a newly logged-in account and preserves non-auth state",
       },
       pollIntervalMs: 5,
       settleMs: 5,
+      onAccountSaved: async (account) => {
+        syncedAccountId = account.id;
+      },
       logger: { log() {}, error() {} },
     });
 
@@ -84,6 +88,7 @@ test("fake logout saves a newly logged-in account and preserves non-auth state",
     assert.equal(completed.account.userId, "2222222222222222");
     assert.equal(completed.originalAccount.userId, "1111111111111111");
     assert.equal((await context.accountStore.list()).length, 2);
+    assert.ok(syncedAccountId, "the new account was not synchronized after saving");
 
     const storageRoot = JSON.parse(await fs.readFile(context.storagePath, "utf8"));
     assert.equal(storageRoot.marker, "preserved");

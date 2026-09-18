@@ -16,9 +16,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { daemonSpec } from "../src/lib/launch-spec.js";
-import { loadAppConfig } from "../src/lib/app-config.js";
-import { proxyChildEnv } from "../src/lib/net-diagnostics.js";
-import { resolveProxyVars } from "../src/lib/system-proxy.js";
+import { stripProxyEnv } from "../src/lib/net-diagnostics.js";
 import {
   DATA_DIR,
   HOST,
@@ -98,17 +96,13 @@ async function readHealth() {
 
 async function startDaemon() {
   const launch = daemonSpec();
-  const config = await loadAppConfig(DATA_DIR).catch(() => null);
-  const proxy = config
-    ? await resolveProxyVars(config.proxy)
-    : { vars: null };
   const child = spawn(launch.command, launch.args, {
     cwd: launch.cwd,
     detached: true,
     stdio: "ignore",
     windowsHide: true,
     env: {
-      ...proxyChildEnv({ proxyVars: proxy.vars }),
+      ...stripProxyEnv(process.env),
       TRAE_ENHANCER_UI_PORT: String(UI_PORT),
     },
   });

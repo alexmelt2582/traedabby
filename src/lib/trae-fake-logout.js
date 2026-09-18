@@ -60,6 +60,7 @@ export class TraeFakeLogoutManager {
     startTrae,
     isTraeRunning = async () => false,
     getLiveIdentity = async () => null,
+    onAccountSaved = null,
     sessionPath = null,
     logger = console,
     sessionTimeoutMs = DEFAULT_TIMEOUT_MS,
@@ -74,6 +75,7 @@ export class TraeFakeLogoutManager {
     this.startTrae = startTrae;
     this.isTraeRunning = isTraeRunning;
     this.getLiveIdentity = getLiveIdentity;
+    this.onAccountSaved = typeof onAccountSaved === "function" ? onAccountSaved : null;
     this.sessionPath = sessionPath;
     this.logger = logger;
     this.sessionTimeoutMs = sessionTimeoutMs;
@@ -364,6 +366,24 @@ export class TraeFakeLogoutManager {
       now: this.now(),
     });
     session.account = saved.account;
+    await this.setSessionState(
+      session,
+      "syncing",
+      "新账号已保存，正在同步额度和签到...",
+    );
+    if (this.onAccountSaved) {
+      try {
+        await this.onAccountSaved(saved.account, {
+          source: "fake-logout",
+          createdSnapshot: saved.createdSnapshot,
+        });
+      } catch (error) {
+        session.syncError = error.message || String(error);
+        this.logger.error(
+          `[fake-logout] post-login sync failed sessionId=${session.sessionId}: ${session.syncError}`,
+        );
+      }
+    }
     await this.setSessionState(
       session,
       "complete",
