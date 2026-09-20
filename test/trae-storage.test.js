@@ -13,6 +13,7 @@ import {
   validateAuthSnapshot,
 } from "../src/lib/trae-storage.js";
 import { parseIcubesValue } from "../src/lib/trae-crypto.js";
+import { mintDeviceIdentity } from "../src/lib/device-identity.js";
 
 function storageFixture() {
   return {
@@ -75,6 +76,42 @@ test("auth snapshot validation rejects incomplete states", () => {
       }),
     /Incomplete TRAE authentication state/,
   );
+});
+
+test("auth snapshot keeps a valid top-level device identity", () => {
+  const identity = mintDeviceIdentity();
+  const fixture = storageFixture();
+  fixture.deviceIdentity = identity;
+  const snapshot = extractAuthSnapshot(fixture, { capturedAt: 123 });
+  assert.deepEqual(snapshot.deviceIdentity, identity);
+  assert.equal(snapshot.capturedAt, 123);
+});
+
+test("auth snapshot omits absent or invalid device identity", () => {
+  const snapshot = extractAuthSnapshot(storageFixture());
+  assert.equal(Object.hasOwn(snapshot, "deviceIdentity"), false);
+  const bad = storageFixture();
+  bad.deviceIdentity = { deviceId: "broken" };
+  assert.equal(Object.hasOwn(extractAuthSnapshot(bad), "deviceIdentity"), false);
+});
+
+test("auth snapshot validation rejects a malformed device identity", () => {
+  const snapshot = extractAuthSnapshot(storageFixture());
+  snapshot.deviceIdentity = { deviceId: "nope" };
+  assert.throws(() => validateAuthSnapshot(snapshot), /invalid device identity/);
+});
+
+test("email sanitization and injection preservation keep device identity", () => {
+  const identity = mintDeviceIdentity();
+  const fixture = storageFixture();
+  fixture.deviceIdentity = identity;
+  fixture["iCubeAuthInfo://icube.cloudide"] = JSON.stringify({
+    userId: "1026288307407252",
+    account: { userId: "1026288307407252", username: "tester" },
+  });
+  const snapshot = extractAuthSnapshot(fixture);
+  assert.deepEqual(sanitizeAuthSnapshotEmails(snapshot).deviceIdentity, identity);
+  assert.deepEqual(normalizeAuthSnapshotForInjection(snapshot).deviceIdentity, identity);
 });
 
 test("identity extraction never uses the device key suffix", () => {

@@ -1,4 +1,5 @@
 import { encryptIcubesValue, parseIcubesValue } from "./trae-crypto.js";
+import { isDeviceIdentity } from "./device-identity.js";
 
 const AUTH_PREFIX = "iCubeAuthInfo://";
 const SERVER_PREFIX = "iCubeServerData://";
@@ -107,6 +108,9 @@ export function extractAuthSnapshot(storageRoot, { capturedAt = Date.now() } = {
     capturedAt,
     keys,
   };
+  if (isDeviceIdentity(storageRoot.deviceIdentity)) {
+    snapshot.deviceIdentity = storageRoot.deviceIdentity;
+  }
   validateAuthSnapshot(snapshot);
   return snapshot;
 }
@@ -293,6 +297,10 @@ export function validateAuthSnapshot(snapshot) {
   if (!hasUsertag) missing.push("usertag");
   if (missing.length) {
     throw new Error(`Incomplete TRAE authentication state: missing ${missing.join(", ")}`);
+  }
+
+  if (Object.hasOwn(snapshot, "deviceIdentity") && !isDeviceIdentity(snapshot.deviceIdentity)) {
+    throw new Error("TRAE authentication snapshot has an invalid device identity");
   }
 
   return true;

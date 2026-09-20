@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { readJsonFile, stableHash, writeJsonAtomic } from "./json-file.js";
 import { readAuthFromSnapshot } from "./trae-refresh.js";
+import { mintDeviceIdentity, readDeviceIdentity } from "./device-identity.js";
 import {
   extractAuthSnapshot,
   extractIdentityFromSnapshot,
@@ -226,6 +227,23 @@ export class AccountStore {
 
     const accountId = `acct_${stableHash(identityKey)}`;
     const snapshotPath = this.snapshotPath(accountId);
+    // Every account carries a fixed device identity no matter how it is added.
+    // The OAuth login path supplies one via buildStorageRoot; adopting or
+    // syncing the signed-in account reads live TRAE storage which has none. Reuse
+    // a previously-stored identity for this account, otherwise mint a single one —
+    // live storage never carries it, so without this reuse every backup would mint
+    // a brand-new identity and the account would keep changing device.
+    if (!readDeviceIdentity(snapshot)) {
+      let previouslyStored = null;
+      try {
+        previouslyStored = readDeviceIdentity(
+          await readJsonFile(snapshotPath, { required: false }),
+        );
+      } catch {
+        previouslyStored = null;
+      }
+      snapshot.deviceIdentity = previouslyStored ?? mintDeviceIdentity();
+    }
     await fs.mkdir(path.dirname(snapshotPath), { recursive: true });
     await writeJsonAtomic(snapshotPath, snapshot, { mode: 0o600 });
 

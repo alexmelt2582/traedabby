@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { AccountStore } from "../src/lib/accounts.js";
 import { isKeepaliveDue } from "../src/lib/trae-keepalive.js";
+import { isDeviceIdentity, readDeviceIdentity } from "../src/lib/device-identity.js";
 import { traeStorageKeys } from "../src/lib/trae-storage.js";
 
 async function tempDir() {
@@ -46,6 +47,26 @@ async function seedAccount(store, { auth, keepalive = null, userId = "1026288307
   if (keepalive) await store.saveKeepalive(saved.account.id, keepalive);
   return saved.account.id;
 }
+
+test("backup mints a device identity and reuses it on later backups", async () => {
+  const dataDir = await tempDir();
+  try {
+    const store = new AccountStore(dataDir);
+    // A live TRAE storage snapshot has no deviceIdentity; the add/adopt path must
+    // mint one so every account carries a fixed identity.
+    const first = await store.backupCurrent(storageFixture(), { now: 500 });
+    const firstSnapshot = await store.readSnapshot(first.account.id);
+    assert.equal(isDeviceIdentity(firstSnapshot.deviceIdentity), true);
+    const firstIdentity = readDeviceIdentity(firstSnapshot);
+
+    // A later backup of the same account keeps the same identity (no re-mint).
+    const second = await store.backupCurrent(storageFixture(), { now: 900 });
+    const secondSnapshot = await store.readSnapshot(second.account.id);
+    assert.deepEqual(readDeviceIdentity(secondSnapshot), firstIdentity);
+  } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
 
 test("backup stores the auth snapshot separately from the public index", async () => {
   const dataDir = await tempDir();

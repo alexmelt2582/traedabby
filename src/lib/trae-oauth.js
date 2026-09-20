@@ -7,6 +7,7 @@ import { pickNumber, pickString, requestJson, safeRemoteError } from "./http.js"
 import { readJsonFile } from "./json-file.js";
 import { encryptIcubesValue } from "./trae-crypto.js";
 import { buildDeviceInfo, collectLoginContext } from "./trae-product.js";
+import { deviceIdentityRecord, readDeviceIdentity } from "./device-identity.js";
 import { normalizeEmail, traeStorageKeys } from "./trae-storage.js";
 
 const CALLBACK_PATH = "/authorize";
@@ -283,12 +284,13 @@ async function requestLoginGuidance(loginTraceId, accountApi) {
 }
 
 async function exchangeAuthCode(context, authCode, verifier, userTag, loginHost) {
-  const { publicKey, privateKey } = crypto.generateKeyPairSync("ec", {
-    namedCurve: "prime256v1",
-    publicKeyEncoding: { type: "spki", format: "pem" },
-    privateKeyEncoding: { type: "pkcs8", format: "pem" },
-  });
-  const deviceInfo = buildDeviceInfo(context, publicKey);
+  // Reuse the account's fixed key pair from the login context instead of minting
+  // a fresh device key on every exchange.
+  const keyPair = context.keyPair;
+  if (!keyPair?.privateKeyPEM || !keyPair?.publicKeyPEM) {
+    throw new Error("TRAE login context is missing a device key pair");
+  }
+  const deviceInfo = buildDeviceInfo(context, keyPair.publicKeyPEM);
   const origins = [...new Set([loginHost, context.accountApi, ...ACCOUNT_API_ORIGINS].filter(Boolean))];
   let lastError = null;
 
@@ -352,8 +354,8 @@ async function exchangeAuthCode(context, authCode, verifier, userTag, loginHost)
           ["refreshExpireAt"],
         ]),
         deviceInfo,
-        privateKey,
-        publicKey,
+        privateKey: keyPair.privateKeyPEM,
+        publicKey: keyPair.publicKeyPEM,
       };
     } catch (error) {
       lastError = error.message;
@@ -444,6 +446,7 @@ function buildStorageRoot(context, exchange, userInfo, callback) {
   return {
     identity,
     storageRoot: {
+      deviceIdentity: deviceIdentityRecord(context),
       [traeStorageKeys.AUTH_PREFIX + "icube.cloudide"]: encryptIcubesValue(auth),
       [`${traeStorageKeys.DEVICE_PREFIX}${context.deviceId}`]: encryptIcubesValue({
         privateKeyPEM: exchange.privateKey,
@@ -512,9 +515,22 @@ export class TraeOAuthManager {
       }
     }
     const storageRoot = await readJsonFile(this.storagePath, { required: false });
+    // Reuse the currently-active account's fixed device identity when we manage
+    // it, so a re-login keeps the same deviceId/machineId/key pair. A brand-new
+    // or unmanaged account mints a fresh identity inside collectLoginContext.
+    let reusableDeviceIdentity = null;
+    try {
+      const active = await this.accountStore.resolveActiveAccount(storageRoot);
+      if (active && active.state === "matched" && active.id) {
+        reusableDeviceIdentity = readDeviceIdentity(await this.accountStore.readSnapshot(active.id));
+      }
+    } catch {
+      reusableDeviceIdentity = null;
+    }
     const context = await collectLoginContext({
       exePath: this.exePath,
       storageRoot,
+      deviceIdentity: reusableDeviceIdentity,
     });
     const loginId = crypto.randomUUID();
     const loginTraceId = crypto.randomUUID();

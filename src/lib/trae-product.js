@@ -1,9 +1,8 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import { parseIcubesValue } from "./trae-crypto.js";
+import { isDeviceIdentity, mintDeviceIdentity } from "./device-identity.js";
 import { normalizeEmail } from "./trae-storage.js";
 
 const DEFAULT_CLIENT_ID = "en1oxy7wnw8j9n";
@@ -52,19 +51,6 @@ function getStorageString(storageRoot, key) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function parseDeviceId(storageRoot) {
-  for (const key of Object.keys(storageRoot || {})) {
-    const match = /^iCubeAuthInfo:\/\/icube-dc:(\d{8,24})$/.exec(key);
-    if (match) return match[1];
-  }
-  const direct = firstString(
-    storageRoot?.device_id,
-    storageRoot?.deviceId,
-    storageRoot?.x_device_id,
-  );
-  return direct && /^\d{8,24}$/.test(direct) ? direct : null;
-}
-
 function parseAuthIdentity(storageRoot) {
   const raw = storageRoot?.["iCubeAuthInfo://icube.cloudide"];
   if (typeof raw !== "string") return {};
@@ -80,15 +66,13 @@ function parseAuthIdentity(storageRoot) {
   }
 }
 
-export async function collectLoginContext({ exePath, storageRoot }) {
+export async function collectLoginContext({ exePath, storageRoot, deviceIdentity = null }) {
   const product = await readProductInfo(exePath);
   const authIdentity = parseAuthIdentity(storageRoot);
-  const deviceId = parseDeviceId(storageRoot) || crypto.randomInt(10n ** 15n, 10n ** 16n).toString();
-  const machineId =
-    getStorageString(storageRoot, "telemetry.machineId") || crypto.randomUUID().replaceAll("-", "");
+  // Reuse the account's fixed identity when one is provided, otherwise mint a
+  // fresh one now so the whole login (URL + exchange) advertises one identity.
+  const identity = isDeviceIdentity(deviceIdentity) ? deviceIdentity : mintDeviceIdentity();
   const appVersion = firstString(product.appVersion, product.pluginVersion, DEFAULT_APP_VERSION);
-  const deviceType = "windows";
-  const deviceBrand = firstString(process.env.PROCESSOR_IDENTIFIER, "Windows");
 
   return {
     clientId: product.clientId || DEFAULT_CLIENT_ID,
@@ -97,12 +81,16 @@ export async function collectLoginContext({ exePath, storageRoot }) {
     appType: product.appType || "stable",
     accountApi: product.accountApi || "https://api.trae.cn",
     authDomain: product.authDomain || "www.trae.cn",
-    machineId,
-    deviceId,
-    deviceName: os.hostname() || "PC",
-    deviceBrand,
-    deviceType,
-    osVersion: `${os.type()} ${os.release()}`,
+    machineId: identity.machineId,
+    deviceId: identity.deviceId,
+    deviceName: identity.deviceName,
+    deviceBrand: identity.deviceBrand,
+    deviceType: identity.deviceType,
+    osVersion: identity.osVersion,
+    keyPair: {
+      privateKeyPEM: identity.privateKeyPEM,
+      publicKeyPEM: identity.publicKeyPEM,
+    },
     env: getStorageString(storageRoot, "ai_assistant.request.env") || "",
     identity: {
       userId: firstString(authIdentity.userId),

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import { pickNumber, pickString, requestJson, safeRemoteError } from "./http.js";
+import { readDeviceIdentity } from "./device-identity.js";
 import { shouldRotateCredentials } from "./trae-keepalive.js";
 import { encryptIcubesValue, parseIcubesValue } from "./trae-crypto.js";
 import {
@@ -241,9 +242,23 @@ export async function refreshAuthSnapshot(snapshot) {
 
   const host = resolveHost(auth);
   const clientId = normalize(auth.authClientId) || CLIENT_ID;
+  // Rebuild the device info from the account's fixed identity when available so
+  // refresh advertises the same fingerprint as login; fall back to the deviceInfo
+  // captured at first login otherwise.
+  const identity = readDeviceIdentity(normalized);
   const deviceInfo = {
-    ...(auth.deviceInfo && typeof auth.deviceInfo === "object" ? auth.deviceInfo : {}),
+    DeviceID: identity?.deviceId ?? auth.deviceInfo?.DeviceID,
+    MachineID: identity?.machineId ?? auth.deviceInfo?.MachineID,
+    PlatformCode: auth.deviceInfo?.PlatformCode ?? "SOLO_PC",
+    DeviceType: auth.deviceInfo?.DeviceType ?? identity?.deviceType ?? "PC",
+    DeviceName: identity?.deviceName ?? auth.deviceInfo?.DeviceName,
+    DeviceModel: identity?.deviceBrand ?? auth.deviceInfo?.DeviceModel,
+    ClientVersion: auth.deviceInfo?.ClientVersion,
     DevicePublicKey: keyPair.publicKeyPEM,
+    DeviceBrand: identity?.deviceBrand ?? auth.deviceInfo?.DeviceBrand,
+    DeviceCPU: auth.deviceInfo?.DeviceCPU ?? "",
+    OSInfo: identity?.deviceType ?? auth.deviceInfo?.OSInfo,
+    OSVersion: identity?.osVersion ?? auth.deviceInfo?.OSVersion,
   };
   const deviceProof = buildDeviceProof(refreshToken, keyPair.privateKeyPEM, clientId);
   const response = await requestExchange(
