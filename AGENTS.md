@@ -1,5 +1,21 @@
 # Project Rules
 
+## 发布流程
+本项目遵循 `docs/RELEASE_FLOW.md` 中的流程。
+
+核心规则：
+- `main` 是唯一长期分支，禁止直接推送。
+- 功能开发从 `main` 创建 `feature/*` 分支。
+- 开发完成后，AI 执行构建和打包，生成发布包，等待用户本地验收。
+- 用户说“验收通过，发布 vX.Y.Z”后，AI 才能执行发布。
+- 发布动作：合并功能分支到 `main`，推送 `main`，打标签 `vX.Y.Z`，推送标签。
+- 推送标签后，GitHub Actions 自动创建 Release。
+- 禁止创建 `release/*` 或 `develop` 分支。
+- 禁止强制推送 `main`。
+- 提交信息遵循 Conventional Commits。
+
+
+
 ## Product
 
 This repository contains a local enhancement assistant for `TRAE SOLO CN` on Windows.
