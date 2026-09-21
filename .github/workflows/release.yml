@@ -10,20 +10,39 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
-      - run: npm ci
-      - run: npm run build
-      - run: tar -czf release-${{ github.ref_name }}.tar.gz ./dist
+      - name: Install dependencies
+        run: npm ci
 
-      - uses: softprops/action-gh-release@v2
+      - name: Build portable executable
+        run: npm run build:exe
+
+      - name: Install Inno Setup 6
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        run: npm run build:installer
+
+      - name: Prepare release notes (tag subject)
+        id: notes
+        shell: pwsh
+        run: |
+          $subject = git -c core.pager=cat tag -l "v*" --format='%(contents:subject)' "$env:GITHUB_REF_NAME"
+          "body=$subject" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
         with:
-          files: release-${{ github.ref_name }}.tar.gz
-          generate_release_notes: true
+          files: dist/installer/TraeEnhancer-Setup-*.exe
+          body: ${{ steps.notes.outputs.body }}
+          draft: false
+          prerelease: false
