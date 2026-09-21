@@ -91,7 +91,7 @@ jobs:
             dist/TraeEnhancer-Portable-*.zip
 
       # ------- 只有打 tag 时才挂到 GitHub Release -------
-      - name: Read release notes from docs/releases
+      - name: Check release notes exists
         id: notes
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
@@ -100,8 +100,7 @@ jobs:
           if (-not (Test-Path -LiteralPath $docs -PathType Leaf)) {
             throw "release notes not found: $docs"
           }
-          $md = Get-Content -LiteralPath $docs -Raw -Encoding utf8
-          "body=$md" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          echo "notes ok: $docs"
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -110,6 +109,6 @@ jobs:
           files: |
             dist/installer/TraeEnhancer-Setup-*.exe
             dist/TraeEnhancer-Portable-*.zip
-          body: ${{ steps.notes.outputs.body }}
+          body_path: docs/releases/v${{ steps.ver.outputs.version }}.md
           draft: false
           prerelease: false
