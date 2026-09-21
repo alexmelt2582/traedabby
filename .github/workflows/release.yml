@@ -91,52 +91,16 @@ jobs:
             dist/TraeEnhancer-Portable-*.zip
 
       # ------- 只有打 tag 时才挂到 GitHub Release -------
-      - name: Prepare release notes (markdown, dynamic SHA256)
+      - name: Read release notes from docs/releases
         id: notes
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
-          $version = '${{ steps.ver.outputs.version }}'
-          $releaseDate = Get-Date -Format 'yyyy-MM-dd'
-          $setup = "dist\installer\TraeEnhancer-Setup-$version.exe"
-          $zip   = "dist\TraeEnhancer-Portable-$version.zip"
-          $setupHash = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLower()
-          $zipHash   = (Get-FileHash -LiteralPath $zip   -Algorithm SHA256).Hash.ToLower()
-          $md = @"
-# TRAE SOLO CN 增强助手 v$version
-
-发布日期：$releaseDate
-发布类型：内部 / 小范围测试版
-签名状态：未签名，Windows SmartScreen 可能提示未知发布者
-发布分支：feature/device-identity（已合并 main）
-代理功能：不包含；完整代理实现保留在 feature/proxy-support 分支，本发布包只使用直连网络。
-
-## 本次更新
-- 新增账号级设备身份：每个账号持有独立的一套 deviceId / machineId / 硬指纹 / EC 密钥对，被该账号的登录与刷新固定复用，规避官方"单设备可绑定账号数"触顶。
-- 采纳 TRAE 现有账号时，复用其原本绑定的设备身份与密钥，避免因 deviceId 与密钥不配对触发 20403 校验错误。
-- 安装器支持检测先前已安装版本：覆盖安装时提示保留账号数据与自启动偏好的选择。
-- 修复 TRAE 未登录时的状态判定与账号同步时机，使新账号保存后立即同步签到、套餐与余额信息。
-
-## 安装包
-发布目录：dist\installer、dist
-
-包含：
-
-- TraeEnhancer-Setup-$version.exe
-- TraeEnhancer-Portable-$version.zip
-
-SHA256：
-
-$setupHash  TraeEnhancer-Setup-$version.exe
-$zipHash  TraeEnhancer-Portable-$version.zip
-
-## 已知限制
-- 安装包未签名，Windows SmartScreen 可能提示风险。
-- 当前没有在线自动更新功能，升级需要覆盖运行新版安装包。
-- 导入导出属于账号迁移，不是多设备共享。原设备继续更新登录信息后，副本可能失效并需要重新登录。
-- 当前仅支持 Windows 10/11 x64 和 TRAE SOLO CN。
-"@
-          $md | Out-File -FilePath "dist\RELEASE_NOTES.md" -Encoding utf8
+          $docs = "docs/releases/${{ steps.ver.outputs.version }}.md"
+          if (-not (Test-Path -LiteralPath $docs -PathType Leaf)) {
+            throw "release notes not found: $docs"
+          }
+          $md = Get-Content -LiteralPath $docs -Raw -Encoding utf8
           "body=$md" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
 
       - name: Publish GitHub Release
