@@ -104,5 +104,5 @@
 - `trae-storage.js`：`extractAuthSnapshot` 透传、`validateAuthSnapshot` 校验顶层 `deviceIdentity`。
 - `trae-refresh.js`：刷新优先从快照 `deviceIdentity` 重建设备信息，与登录指纹一致。
 - `trae-checkin.js`：**不改**（签到 `x-device-id` 仍用 userId）。
-- 测试：`npm test` 277 项全绿；`npm run check` 通过；`build:exe` 自校验通过。
-- **未提交、未发布**，验收通过后按 `docs/RELEASE_FLOW.md` 走发布。
+- 测试：`npm test` 279 项全绿；`npm run check` 通过；`build:exe` 自校验通过。
+- **当前状态**：代码已提交在 `feature/device-identity` 分支，尚未合并 `main`、未发布。模块适用范围是「增强助手驱动的无感/假退出重登同账号才复用固定身份」；TRAE 原生退出重登不受控、删除重加一定换新身份，实际价值待用户确认是否保留。验收通过后再按 `docs/RELEASE_FLOW.md` 走发布。
