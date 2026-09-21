@@ -50,7 +50,8 @@ jobs:
 
       - name: Package portable zip
         shell: pwsh
-        run: tar -a -c -f "dist/installer/TraeEnhancer-Portable-${{ steps.ver.outputs.version }}.zip" -C dist/portable .
+        # build:exe 已创建 dist/；便携 zip 落在 dist/ 根（dist/installer 要等 Inno Setup 才生成，故不能写到这里）
+        run: tar -a -c -f "dist/TraeEnhancer-Portable-${{ steps.ver.outputs.version }}.zip" -C dist/portable .
 
       - name: Install Inno Setup 6
         shell: pwsh
@@ -69,7 +70,10 @@ jobs:
             "TraeEnhancer-Setup-$version.exe",
             "TraeEnhancer-Portable-$version.zip"
           )
-          $actual = @(Get-ChildItem -LiteralPath dist\installer -File | ForEach-Object Name)
+          $actual = @(
+            @(Get-ChildItem -LiteralPath dist\installer -File | ForEach-Object Name),
+            @(Get-ChildItem -LiteralPath dist -File | ForEach-Object Name)
+          )
           $missing = Compare-Object $expected $actual
           if ($missing.Count -gt 0) {
             throw "artifacts mismatch, expected [$($expected -join ', ')], got [$($actual -join ', ')]"
@@ -78,7 +82,7 @@ jobs:
 
       - name: List artifacts
         shell: bash
-        run: ls -lh dist/installer/
+        run: ls -lh dist/ dist/installer/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -86,7 +90,7 @@ jobs:
           name: trae-enhancer-win64
           path: |
             dist/installer/TraeEnhancer-Setup-*.exe
-            dist/installer/TraeEnhancer-Portable-*.zip
+            dist/TraeEnhancer-Portable-*.zip
 
       # ------- 只有打 tag 时才挂到 GitHub Release -------
       - name: Prepare release body (tag subject)
@@ -103,7 +107,7 @@ jobs:
         with:
           files: |
             dist/installer/TraeEnhancer-Setup-*.exe
-            dist/installer/TraeEnhancer-Portable-*.zip
+            dist/TraeEnhancer-Portable-*.zip
           body: ${{ steps.notes.outputs.body }}
           draft: false
           prerelease: false
