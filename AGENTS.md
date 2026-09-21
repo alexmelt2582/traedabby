@@ -5,6 +5,7 @@
 
 核心规则：
 - `main` 是唯一长期分支，禁止直接推送。
+- **严禁直接在 `main` 分支上进行任何代码改动或提交**：一切功能/修复/调整都必须先创建 `feature/*` 分支，在分支上完成后按流程合并回 `main`。如已在 `main` 上有未提交改动，必须先切到新分支再操作。
 - 功能开发从 `main` 创建 `feature/*` 分支。
 - 开发完成后，AI 执行构建和打包，生成发布包，等待用户本地验收。
 - 用户说“验收通过，发布 vX.Y.Z”后，AI 才能执行发布。
@@ -12,287 +13,225 @@
 - 推送标签后，GitHub Actions 自动创建 Release。
 - 禁止创建 `release/*` 或 `develop` 分支。
 - 禁止强制推送 `main`。
-- 提交信息遵循 Conventional Commits。
+- 提交信息遵循 Conventional Commits；**每个提交的标题与正文描述信息一律使用中文书写**。
 
 
 
-## Product
+## 产品定位
 
-This repository contains a local enhancement assistant for `TRAE SOLO CN` on Windows.
-The assistant must not modify the official installation package or `app.asar`.
-It communicates with the running Electron renderer through Chrome DevTools Protocol
-and keeps all account data on the local machine.
+本仓库是 Windows 上 `TRAE SOLO CN` 的本地增强助手。
+它不得修改官方安装包或 `app.asar`。
+它通过 Chrome DevTools Protocol 与正在运行的 Electron 渲染进程通信，
+并将所有账号数据保留在本机。
 
-The only file of TRAE's own it may write is the user-level `User/settings.json`,
-and only the `update.mode` entry inside it. Account state, workspaces, history and
-every other setting stay untouched.
+TRAE 自身文件它唯一允许写入的是用户级 `User/settings.json`，
+且仅写入其中的 `update.mode` 一项。账号状态、工作区、历史记录以及其它所有设置均保持原样。
 
-## Account Model
+## 账号模型
 
-- Account switching uses the same shared TRAE user-data directory as WorkDaddy.
-- A backup contains only TRAE authentication state, not the whole user-data directory.
-- The authentication snapshot must include the account-scoped `iCube*` keys and the
-  matching device-key/usertag records.
-- Non-authentication keys such as workspaces, settings, extensions, and window state
-  must be preserved.
-- Switching is transactional: validate, back up, atomically replace, verify, and roll
-  back on failure.
-- Transaction rollback uses in-memory state only. Do not persist raw
-  `storage.before.json` or legacy `state.before.vscdb` copies.
-- Normalize sentinel identity values such as `unknown` to `null`; never store them
-  as account metadata.
-- Account exports must always be encrypted with a user-supplied password. Never write
-  passwords or plaintext authentication snapshots to disk or logs.
-- Check-in requests must use each account's stable `userId` as `x-device-id`. Never
-  share one machine-generated device id across accounts.
-- Check-in endpoints are served from `https://api.trae.cn`; do not substitute the
-  account-specific `loginHost`.
-- Keep-alive may rotate credentials only for inactive accounts, and only on expiry:
-  exchange when the access token has under a day left, or the refresh token under a
-  month. A credential with days left must be used as-is, because exchanging it
-  invalidates every other device holding the same chain. The active account must be
-  synchronized from the running TRAE storage and must not have its refresh token
-  rotated directly from the backup.
-- Account switching uses the same expiry guard (`refreshAuthSnapshotIfNeeded`). It
-  must not exchange a target account merely because it is being selected; a later 401
-  is the explicit retry point that may rotate once.
-- Identifying the active account yields three states, not two: `matched` takes the
-  sync path; `not-managed` (TRAE holds an account outside the saved list) is safe and
-  rotates normally; `unknown` (the live identity cannot be read at all) must skip the
-  entire sweep and log why, because rotating then could invalidate a session we cannot
-  see. Never collapse `unknown` into `not-managed`, and never treat it as "keep-alive
-  is not needed".
-- Skip automatic check-in and keep-alive while Cockpit Tools is running. Both tools
-  rotating the same refresh tokens can invalidate each other.
-- When the Cockpit Tools probe cannot decide (`unknown`), check-in still runs but
-  credential rotation is refused, and keep-alive is skipped. Both paths now rotate only
-  on expiry, so the refusal is what removes the remaining overlap.
-- The injected panel is a pure view of `data/accounts/index.json`. It must never
-  derive check-in state itself; the daemon pushes `trae-enhancer:accounts-updated`
-  over CDP after every state change, and the panel re-reads on that event and on open.
-  Nothing polls.
-- Opening the panel asks the daemon to reconcile (`POST /api/accounts/panel-open`).
-  That call is idempotent: an account already checked in on the server is recorded as
-  such without claiming a second reward.
-- The panel must never request a credit refresh in response to a daemon push. The
-  daemon already pushes after its own refresh, so that pair would loop.
-- The total check-in reward is `credits`; `extra_credits` is only an additional
-  component and must not be displayed as the total.
-- A failed account backup must write a log line before the 500 is returned. The panel's
-  empty state cannot tell "no accounts saved yet" from "adopting the current account
-  failed", so that log is the only place the difference survives.
+- 账号切换复用与 WorkDaddy 相同的共享 TRAE user-data 目录。
+- 备份只包含 TRAE 认证状态，而不是整个 user-data 目录。
+- 认证快照必须包含账号维度的 `iCube*` 键，以及与之匹配的 device-key/usertag 记录。
+- 工作区、设置、扩展、窗口状态等非认证键必须保留。
+- 切换是事务性的：校验、备份、原子替换、验证、失败回滚。
+- 事务回滚仅使用内存状态。不要持久化原始的 `storage.before.json` 或旧版
+  `state.before.vscdb` 副本。
+- 将 `unknown` 之类的哨兵身份值规范化为 `null`；绝不把它们存为账号元数据。
+- 账号导出必须始终使用用户提供的密码加密。绝不把密码或明文认证快照写入磁盘或日志。
+- 签到请求必须使用每个账号稳定的 `userId` 作为 `x-device-id`。绝不跨账号共享
+  一个机器生成的设备 id。
+- 签到端点由 `https://api.trae.cn` 提供；不要改用账号专属的 `loginHost`。
+- Keep-alive 只能为非活跃账号轮换凭据，且仅在到期时：访问令牌剩余不足一天、
+  或刷新令牌剩余不足一个月时才交换。仍有剩余天数的凭据必须原样使用，因为交换它
+  会使持有同一链路的其它所有设备失效。活跃账号必须从正在运行的 TRAE 存储同步，
+  且不得直接基于备份轮换其刷新令牌。
+- 账号切换使用相同的到期保护（`refreshAuthSnapshotIfNeeded`）。不得仅仅因为目标
+  账号被选中就交换它；之后的 401 是允许轮换一次的显式重试点。
+- 识别活跃账号得到三种状态而非两种：`matched` 走同步路径；`not-managed`
+  （TRAE 持有已保存列表之外的账号）是安全的，可正常轮换；`unknown`（完全无法读到
+  当前身份）必须跳过整个扫查并记录原因，因为此时轮换可能使一个我们不可见的会话
+  失效。绝不要把 `unknown` 折叠为 `not-managed`，也绝不把它当成"无需 keep-alive"。
+- 在 Cockpit Tools 运行时跳过自动签到与 keep-alive。两个工具轮换相同的刷新令牌
+  会互相失效。
+- 当 Cockpit Tools 探测无法判定（`unknown`）时，签到仍会执行，但拒绝凭据轮换，
+  并跳过 keep-alive。两条路径现在都只在到期时轮换，因此拒绝正是消除剩余重叠的机制。
+- 注入的面板是 `data/accounts/index.json` 的纯视图。它绝不能自行推导签到状态；
+  每次状态变化后由守护进程通过 CDP 推送 `trae-enhancer:accounts-updated`，面板在该
+  事件及打开时重新读取。不做任何轮询。
+- 打开面板会请求守护进程对账（`POST /api/accounts/panel-open`）。
+  该调用是幂等的：已在服务器签到的账号按已签到记录，不会重复领取奖励。
+- 面板绝不能响应守护进程推送而请求刷新积分。守护进程在自身刷新后已经推送，
+  因此那样会造成死循环。
+- 签到总奖励是 `credits`；`extra_credits` 只是附加项，不得作为总数展示。
+- 账号备份失败必须在返回 500 之前先写一行日志。面板的空状态无法区分
+  "还没有保存任何账号"与"接管当前账号失败"，因此该日志是差异存活的唯一位置。
 
-## Safety
+## 安全
 
-- Bind local services to `127.0.0.1` only.
-- Never log or expose access tokens, refresh tokens, cookies, private keys, or complete
-  authentication snapshots.
-- Only manage processes whose executable path and user-data directory match the
-  configured TRAE SOLO CN installation.
-- Never close every Electron process or use broad process-name termination.
-- Use UTF-8 without BOM for source files and JSON data.
-- The background supervisor only ever *starts* the daemon. It never terminates
-  anything, so it needs no kill path at all.
-- Stopping the service uses two exact pids and nothing else: the daemon pid from
-  `/api/health` and the supervisor pid from `data/watchdog.pid`. Before
-  terminating, confirm the pid belongs to one of this project's own process
-  images; refuse and report rather than guess.
-- The project directory may contain non-ASCII characters. Never write that path
-  into a `.cmd`, `.vbs`, or `.ps1` source file: create shortcuts through COM
-  (UTF-16) and let generated scripts resolve the project root from their own
-  location at runtime.
-- `scripts/trae-enhancer.cmd`, `scripts/tray.ps1`, `scripts/launch-hidden.vbs`, and
-  every generated autostart script must stay pure ASCII with no BOM. Ask `assertAscii`
-  from `src/lib/autostart.js` to enforce it, and keep Chinese display strings in
-  `data/tray-config.json` (UTF-8) instead.
-- Never pass a path through `JSON.stringify` into VBScript: `\\` is not an escape
-  there and silently corrupts the path. Use `vbsQuote`.
+- 本地服务只绑定 `127.0.0.1`。
+- 绝不记录或暴露访问令牌、刷新令牌、cookie、私钥或完整认证快照。
+- 只管理可执行文件路径和 user-data 目录与所配置的 TRAE SOLO CN 安装匹配的进程。
+- 绝不关闭所有 Electron 进程，也不使用宽泛的按进程名终止。
+- 源码文件和 JSON 数据使用无 BOM 的 UTF-8。
+- 后台监督进程只*启动*守护进程。它从不终止任何东西，因此完全不需要 kill 路径。
+- 停止服务只使用两个精确的 pid，且仅此两者：来自 `/api/health` 的守护进程 pid
+  和来自 `data/watchdog.pid` 的监督进程 pid。终止前先确证该 pid 属于本项目自己的
+  进程镜像；宁可拒绝并报告，也不要猜测。
+- 项目目录可能包含非 ASCII 字符。绝不把该路径写进 `.cmd`、`.vbs` 或 `.ps1`
+  源码文件：通过 COM（UTF-16）创建快捷方式，并让生成的脚本在运行时从自身位置
+  解析项目根目录。
+- `scripts/trae-enhancer.cmd`、`scripts/tray.ps1`、`scripts/launch-hidden.vbs` 以及
+  所有生成的自动启动脚本必须保持纯 ASCII 且无 BOM。请依靠 `src/lib/autostart.js`
+  中的 `assertAscii` 来强制这一点，并把中文显示字符串放到 `data/tray-config.json`
+  （UTF-8）中。
+- 绝不把路径通过 `JSON.stringify` 传入 VBScript：那里的 `\\` 不是转义符，
+  会静默损坏路径。请使用 `vbsQuote`。
 
-## Runtime Invariants
+## 运行时不变式
 
-- Git metadata is stored in `.git-meta`; use
-  `git --git-dir=.git-meta --work-tree=. ...`.
-- The default loopback service is `http://127.0.0.1:47834`; CDP defaults to
-  `127.0.0.1:9334`.
-- Check-in sweeps every `config.checkin.intervalMinutes` (15/30/60/120, default 30) and
-  claims at most once per Asia/Shanghai day. `config.checkin.auto` disables those
-  automatic sweeps only: opening the panel and `POST /api/checkin/run` are user
-  actions and are never gated by it.
-- Check-in settings take effect without a restart. Read the configuration when a
-  trigger fires, never when the timer is built, and rebuild the schedule with
-  `initialRun: false` — saving settings must not claim a reward on the side.
-- A successful CDP connect runs one check-in and adopts the signed-in account when the
-  list is still empty. Both happen once per connection and re-arm only on disconnect.
-  The adoption is attempted once per process run; retrying on every reconnect could
-  adopt an account the user removed by hand.
-- Keep-alive sweeps every 30 minutes. An inactive account is processed every six hours
-  and retried 30 minutes after a failure; the credential is exchanged only on expiry,
-  so most sweeps just refresh insights.
-- The panel shows each account's credential expiry, derived from `keepalive.accessExpiresAt`
-  and `keepalive.refreshExpiresAt`. Those two fields are display metadata carried inside
-  the keep-alive payload — they add no index schema.
-- Those two fields are also filled from the account snapshot when the panel opens
-  (`AccountStore.fillCredentialExpiryFromSnapshots`), because the sweep that writes them
-  may be skipped entirely while Cockpit Tools runs or the live identity is unreadable.
-  The value is the same `auth.expiredAt` the sweep copies, and the fill touches neither
-  the network nor a credential. It must never write `status` or `updatedAt`: a fresh
-  timestamp there reads as a finished sync and postpones the real sweep by a full interval.
-- A validated account snapshot also writes both expiry fields into the index at save
-  time, so a newly added account is visible in the panel immediately instead of waiting
-  for the first sweep or the next panel open. This still leaves `status` and `updatedAt`
-  untouched and does not rotate credentials.
-- Keep-alive, check-in, account switching, login flows, and insight refresh must be
-  mutually exclusive.
-- Restarting the daemon requires stopping the exact PID reported by `/api/health`.
-  Never terminate all Node or Electron processes.
-- A restart is never performed in place. The daemon spawns
-  `service daemon --wait-pid <its own pid>` detached and then exits, so the
-  replacement is started only after the listening port is free and with inherited
-  proxy environment controls removed (`POST /api/daemon/restart`).
-- The settings tab inside the injected panel is the only UI for check-in and TRAE
-  update options. It inherits the panel's existing token auth and loopback port, so
-  no new listener is opened.
-- The supervisor polls `/api/health` every 15 seconds, restarts the daemon after
-  three consecutive failures, and backs off for 60 seconds between attempts.
-- `data/`, `logs/`, `dist/`, and `node_modules/` are local state and are never
-  committed.
+- Git 元数据存放在 `.git-meta`；请使用
+  `git --git-dir=.git-meta --work-tree=. ...`。
+- 默认回环服务是 `http://127.0.0.1:47834`；CDP 默认为 `127.0.0.1:9334`。
+- 签到每 `config.checkin.intervalMinutes`（15/30/60/120，默认 30）扫查一次，并且
+  每个 Asia/Shanghai 天最多领取一次。`config.checkin.auto` 只禁用这些自动扫查：
+  打开面板和 `POST /api/checkin/run` 是用户动作，绝不会被它拦。
 
-## Packaging Invariants
+- 签到设置无需重启即生效。在触发发生时读取配置，绝不在构建定时器时读取，并使用
+  `initialRun: false` 重建计划——保存设置绝不能在后台顺手领取奖励。
+- 一次成功的 CDP 连接会执行一次签到，并在列表仍为空时接管已登录账号。两者都
+  每次连接只发生一次，仅断开时重装。接管在每次进程运行中只尝试一次；在所有重连
+  时重试可能会接管用户手动移除的账号。
+- Keep-alive 每 30 分钟扫查一次。非活跃账号每六小时处理一次，失败后 30 分钟重试；
+  凭据仅在到期时交换，因此多数扫查只是刷新洞察。
+- 面板显示每个账号的凭据到期时间，来源是 `keepalive.accessExpiresAt`
+  和 `keepalive.refreshExpiresAt`。这两个字段是携带在 keep-alive 载荷内的显示元数据
+  ——它们不增加索引模式。
+- 面板打开时，这两个字段也会从账号快照填充
+  （`AccountStore.fillCredentialExpiryFromSnapshots`），因为写入它们的扫查可能在
+  Cockpit Tools 运行或实时身份不可读时被完全跳过。其值与扫查复制的 `auth.expiredAt`
+  相同，该填充既不触网也不接触凭据。它绝不能写 `status` 或 `updatedAt`：那里出现
+  一个新时间戳会被读成同步完成，并把真正扫查推迟整整一个间隔。
+- 经校验的账号快照在保存时也会把两个到期字段写入索引，因此新添加的账号会立即在
+  面板中可见，而无需等待首次扫查或下一次打开面板。这仍然保持 `status` 和
+  `updatedAt` 不被触碰，也不轮换凭据。
+- Keep-alive、签到、账号切换、登录流程与洞察刷新必须互斥。
+- 重启守护进程需要停止 `/api/health` 报告的确切 PID。绝不终止所有 Node 或
+  Electron 进程。
+- 重启绝不原地执行。守护进程会以分离方式生成
+  `service daemon --wait-pid <自身pid>` 然后退出，因此新进程只在监听端口释放、
+  并移除继承的代理环境控制后才启动（`POST /api/daemon/restart`）。
+- 注入面板内的设置标签页是签到与 TRAE 更新选项的唯一 UI。它继承面板既有的
+  token 认证和回环端口，因此不会打开新的监听器。
+- 监督进程每 15 秒轮询 `/api/health`，连续三次失败后重启守护进程，并在两次尝试
+  之间退避 60 秒。
+- `data/`、`logs/`、`dist/` 和 `node_modules/` 是本地状态，绝不提交。
 
-- Any entry that *starts* the application goes through `scripts/launch-hidden.vbs`
-  rather than the executable. The bundled binary is a console-subsystem program, so a
-  shortcut pointing at it always opens a console window. Only launch entries are
-  hidden; a command such as `stop` keeps its console so the user sees the result.
-  `test/packaging-assets.test.js` enforces this against the installer script.
-- `scripts/win/trae-enhancer.iss` must package `scripts/launch-hidden.vbs`; a launcher
-  shortcut pointing at a file the installer never copies is dead on arrival.
-- `src/lib/app-paths.js` is the only module allowed to read `import.meta`. Node 22
-  single-executable applications accept a CommonJS entry only, and esbuild replaces
-  `import.meta` with an empty object in that output format. The build injects
-  `__APP_BUNDLE_ROOT__` for the bundled case.
-- A single executable cannot load sibling scripts from disk. The renderer script
-  must be embedded as a SEA asset (`assets` in `sea-config.json`) and read through
-  `src/lib/inject-source.js`; never read it from disk in a bundle.
-- The daemon, the supervisor, and the service CLI are re-entered through the
-  internal argv switches in `src/lib/launch-spec.js`. Without a switch the bundled
-  executable behaves exactly like the service CLI, so both entry points agree.
-- `npm run build:exe` must verify its own output: the preparation blob has to
-  contain the renderer marker, and the produced executable has to answer `status`.
-  A build that skips these checks must not be reported as working.
-- `npm run build:installer` packages the portable output and must fail when that
-  output is missing or incomplete; it never builds the executable itself.
-- `scripts/win/trae-enhancer.iss` contains Chinese literals and therefore must stay
-  UTF-8 **with BOM**; the build script adds the BOM when it is missing. A BOM-less
-  script is read as ANSI by ISCC and the literals become mojibake.
-- `scripts/win/ChineseSimplified.isl` is a third-party translation used exactly as
-  published; never rewrite its bytes.
-- The installer never reads a path back from a subprocess pipe. Node writes UTF-8
-  while the installer decodes pipes with the system ANSI code page, so any
-  non-ASCII path would be corrupted. Detection happens inside the installer with
-  registry and file checks, and a chosen path is passed *to* the executable as a
-  command line argument, which is Unicode safe.
-- Registry detection for TRAE must match `TRAE SOLO CN` strictly. A looser `TRAE`
-  match also selects the unrelated "Trae CN" IDE and breaks every flow that
-  restarts TRAE.
-- Uninstalling must ask whether to keep user data. `data\` holds account snapshots
-  and the API token, so removing it is irreversible and must never be implicit.
+## 打包不变式
 
-## Installer Invariants
+- 任何*启动*应用的入口都走 `scripts/launch-hidden.vbs`，而不是可执行文件本身。
+  打包出的二进制是控制台子系统程序，因此指向它的快捷方式总是会打开控制台窗口。
+  只有启动入口被隐藏；`stop` 之类的命令保留其控制台，让用户看到结果。
+  `test/packaging-assets.test.js` 会针对安装器脚本强制这一点。
+- `scripts/win/trae-enhancer.iss` 必须打包 `scripts/launch-hidden.vbs`；指向一个
+  安装器从未复制过的文件的启动快捷方式注定失效。
+- `src/lib/app-paths.js` 是唯一允许读取 `import.meta` 的模块。Node 22
+  单可执行应用程序只接受 CommonJS 入口，而 esbuild 在该输出格式下会把
+  `import.meta` 替换为空对象。构建对打包场景注入 `__APP_BUNDLE_ROOT__`。
+- 单个可执行文件无法从磁盘加载同目录脚本。渲染脚本必须作为 SEA 资源
+  （`sea-config.json` 中的 `assets`）嵌入，并通过 `src/lib/inject-source.js`
+  读取；打包场景下绝不从磁盘读取它。
+- 守护进程、监督进程和服务 CLI 通过 `src/lib/launch-spec.js` 中的内部 argv 开关
+  重新进入。没有开关时，打包后的可执行文件行为与服务 CLI 完全一致，因此两个入口
+  一致。
+- `npm run build:exe` 必须验证自身输出：准备产物必须包含渲染标记，产出的
+  可执行文件必须能应答 `status`。跳过这些检查的构建不得被报告为可用。
+- `npm run build:installer` 打包便携输出，并在该输出缺失或不完整时必须失败；
+  它本身从不构建可执行文件。
+- `scripts/win/trae-enhancer.iss` 包含中文字面量，因此必须保持带 BOM 的 UTF-8；
+  构建脚本在缺失时补加 BOM。无 BOM 的脚本会被 ISCC 按 ANSI 读取，字面量会变成乱码。
+- `scripts/win/ChineseSimplified.isl` 是第三方翻译，按原样使用；绝不重写其字节。
+- 安装器绝不从子进程管道读回路径。Node 写 UTF-8，而安装器用系统 ANSI 代码页
+  解码管道，任何非 ASCII 路径都会损坏。检测在安装器内部通过注册表和文件检查完成，
+  所选路径作为命令行参数*传给*可执行文件，这种方式对 Unicode 安全。
+- TRAE 的注册表检测必须严格匹配 `TRAE SOLO CN`。更宽松的 `TRAE` 匹配
+  会选中无关的 "Trae CN" IDE，并破坏所有重启 TRAE 的流程。
+- 卸载必须询问是否保留用户数据。`data\` 存放账号快照和 API token，删除它不可逆，
+  绝不能隐式进行。
 
-- Installer-built installs are per user (`PrivilegesRequired=lowest`) under
-  `%LOCALAPPDATA%\Programs`, with the directory page enabled so the location can
-  be changed.
-- The chosen TRAE path is persisted through
-  `TraeEnhancer.exe configure --trae-exe <path>`, which validates the file exists
-  before writing `data/config.json`.
-- The installer must remove the logon autostart and stop the service before
-  deleting files (`[UninstallRun]`), otherwise a supervisor is left running from a
-  deleted directory.
-- Reinstall and upgrade must stop the old installed service before file replacement.
-  The stable Inno `AppId`, previous app directory, and previous task choices must be
-  preserved so account data and autostart preference survive an upgrade.
-- Interactive uninstall asks whether to keep `data\`; silent uninstall must default
-  to keeping it and must never block on a message box.
+## 安装器不变式
+
+- 安装器构建的安装是按用户的（`PrivilegesRequired=lowest`），位于
+  `%LOCALAPPDATA%\Programs`，目录页已启用，因此可以修改位置。
+- 所选 TRAE 路径通过
+  `TraeEnhancer.exe configure --trae-exe <path>` 持久化，该命令在写入
+  `data/config.json` 前会验证文件是否存在。
+- 安装器必须在删除文件前移除登录自启动并停止服务（`[UninstallRun]`），否则会留下
+  一个从已删除目录运行的监督进程。
+- 重装和升级必须在替换文件前停止旧的已安装服务。必须保留稳定的 Inno `AppId`、
+  上一应用目录以及上一任务选择，让账号数据和自启动偏好跨升级存活。
+- 交互式卸载询问是否保留 `data\`；静默卸载必须默认保留，并且绝不阻塞在消息框上。
 
 
-## Diagnostics Invariants
+## 诊断不变式
 
-- The daemon writes `logs/daemon.log` through `redactLogLine`. Token shapes (JWTs,
-  authorization headers, named secret assignments, long hex strings, secret query
-  values) must be impossible to persist, so redaction is applied to every line.
-- Daemon log writes are synchronous on purpose: the line written immediately before
-  a crash is the most valuable one and an async queue would lose it.
-- Never discard the daemon's output again. Running it with `stdio: "ignore"` and no
-  log file leaves zero evidence on a user machine and makes every failure
-  unfalsifiable.
-- A transport failure must report its `cause` chain. Node hides the real reason
-  (`ECONNREFUSED`, `ENOTFOUND`, a certificate error) inside `error.cause`, so a bare
-  `fetch failed` is not an acceptable message.
-- URLs that reach a message or a log must go through `redactUrl`: the check-in
-  status query carries `did`, which is an account identifier.
-- This release has no proxy configuration. Child processes that can reach the network
-  are spawned with `stripProxyEnv` so inherited proxy environment controls cannot
-  silently reintroduce a proxy path.
-- `service net` only performs direct DNS/HTTPS probes. It must not read or mutate
-  Windows proxy settings.
+- 守护进程通过 `redactLogLine` 写 `logs/daemon.log`。令牌形态（JWT、授权头、
+  具名的密钥赋值、长十六进制串、密钥查询值）必须无法被持久化，因此每一行都
+  应用脱敏。
+- 守护进程日志写入刻意用同步方式：崩溃前立即写下的那一行最有价值，
+  异步队列会丢掉它。
+- 绝不能再丢弃守护进程输出。以 `stdio: "ignore"` 且无日志文件的方式运行它在
+  用户机器上不留下任何证据，让每个失败都无法证伪。
+- 传输失败必须报告其 `cause` 链。Node 把真实原因（`ECONNREFUSED`、`ENOTFOUND`、
+  证书错误）藏在 `error.cause` 里，因此裸的 `fetch failed` 不是可接受的消息。
+- 进入消息或日志的 URL 必须走 `redactUrl`：签到状态查询携带 `did`，它是个账号标识。
+- 本版本没有代理配置。能触网的子进程以 `stripProxyEnv` 生成，使继承的代理环境
+  控制无法静默重新引入代理路径。
+- `service net` 只执行直接的 DNS/HTTPS 探测。它不得读取或修改 Windows 代理设置。
 
-## TRAE Settings Invariants
+## TRAE 设置不变式
 
-- TRAE is switched off from updating itself through
-  `update.mode: "manual"` in `User/settings.json`. This is not a guess: the shipped
-  build logs `update#ctor - manual checks only; automatic updates are disabled by
-  user preference` on that branch and never schedules a check, while `default`
-  schedules one every `update.interval` (60) minutes. Evidence lives in
-  `%APPDATA%\TRAE SOLO CN\logs\<stamp>\main.log`.
-- `update.enableWindowsBackgroundUpdates` already defaults to false and
-  `extensions.autoUpdate` does not exist in this build. Do not add settings that
-  change nothing.
-- That file is JSONC. It is edited as text through `src/lib/trae-settings.js` — a
-  targeted splice of one value — and never through parse-and-reserialise, which would
-  delete comments and reformat whatever TRAE or the user put there.
-- The previous value is remembered in `data/config.json`
-  (`traeUpdate.previousMode`) so "允许自动更新" restores what was there instead of
-  assuming the entry was absent.
-- Before the first write the file is copied to `settings.json.trae-enhancer.bak`, and
-  a failed write restores it. A half-written settings file must be impossible.
-- Repeating the same value writes nothing, so daemon restarts do not touch TRAE's
-  settings file over and over.
-- A change here takes effect when TRAE next starts. Never present it as live.
-- Server-pushed `forceUpdate` is out of scope: TRAE's own remote configuration can
-  still require an update, and pretending otherwise would be a false promise.
+- TRAE 通过 `User/settings.json` 中的 `update.mode: "manual"` 关闭自我更新。
+  这不是猜测：发布的构建在该分支上记录日志 `update#ctor - manual checks only;
+  automatic updates are disabled by user preference` 且从不安排检查，而 `default`
+  会每 `update.interval`（60）分钟安排一次。证据在
+  `%APPDATA%\TRAE SOLO CN\logs\<stamp>\main.log`。
+- `update.enableWindowsBackgroundUpdates` 已经默认为 false，本构建中
+  `extensions.autoUpdate` 不存在。不要添加不产生任何改变的设置。
+- 该文件是 JSONC。通过 `src/lib/trae-settings.js` 以文本方式编辑——只定向拼接一个
+  值——绝不采用解析后再序列化，那会删除注释并重新格式化 TRAE 或用户放进去的内容。
+- 之前的记录保存在 `data/config.json`（`traeUpdate.previousMode`），因此
+  "允许自动更新" 恢复的是原来的值，而不是假定该项缺失。
+- 首次写入前，该文件被复制为 `settings.json.trae-enhancer.bak`，写失败时恢复。
+  半写状态的设置文件必须不可能出现。
+- 重复写同样的值不会产生写入，因此守护进程重启不会反复触碰 TRAE 的设置文件。
+- 此处的改动在 TRAE 下次启动时生效。绝不要把它说成即时生效。
+- 服务器下发的 `forceUpdate` 不在范围内：TRAE 自身的远程配置仍可能要求更新，
+  假装不会就是虚假承诺。
 
-## Local Codex Runtime
+## 本地 Codex 运行时
 
-- On this Windows workspace, the built-in `apply_patch` tool and some sandboxed
-  shell launches can fail before running their command with
-  `fs sandbox helper failed ... setup refresh had errors`. Treat this as a failure
-  of the local Codex execution environment, not as evidence about the repository or
-  the code under test.
-- `.git` is intentionally a 17-byte file containing `gitdir: .git-meta`;
-  `.git-meta` is the real Git metadata directory. Do not move, delete, or recreate
-  `.git` as a repair attempt. It was tested once and did not resolve the runner
-  failure.
-- When a sandboxed process launch is rejected this way, retry the exact command with
-  escalation. Read-only commands that still run should be preferred first:
-  `rg`, `git log`, `git diff --stat`, and `git diff --check`.
-- If the built-in `apply_patch` tool remains unavailable, use the Codex executable's
-  `--codex-run-as-apply-patch` mode directly with the same
-  `*** Begin Patch ... *** End Patch` payload under escalation. The
-  `apply_patch.bat` wrapper may lose multiline arguments, so invoke the backing
-  `codex.exe` directly. Do not replace source edits with `Set-Content`, shell
-  redirects, or ad-hoc file rewriting.
-- After editing through this fallback, verify the change with `git diff --check`,
-  `npm test`, and `npm run check`; use an escalated `git status --short --branch`
-  when the sandboxed status command is still rejected.
+- 在这个 Windows 工作区，内置的 `apply_patch` 工具和某些沙箱化 shell 启动可能
+  在运行命令前就报 `fs sandbox helper failed ... setup refresh had errors`。把这种
+  情况当作本地 Codex 执行环境的失败，而不是关于仓库或被测代码的证据。
+- `.git` 是有意写成的 17 字节文件，内容为 `gitdir: .git-meta`；`.git-meta` 才是
+  真正的 Git 元数据目录。不要把它当作修复尝试去移动、删除或重建 `.git`。
+  已被测过一次，并未解决运行器失败。
+- 当沙箱化进程启动这样被拒时，用升级权限重试完全相同的命令。应优先运行仍然
+  可用的只读命令：`rg`、`git log`、`git diff --stat` 和 `git diff --check`。
+- 如果内置的 `apply_patch` 工具始终不可用，就在升级权限下直接用 Codex 可执行文件的
+  `--codex-run-as-apply-patch` 模式，携带相同的 `*** Begin Patch ... *** End Patch`
+  载荷。`apply_patch.bat` 包装器可能会丢失多行参数，因此直接调用后端的
+  `codex.exe`。不要用 `Set-Content`、shell 重定向或临时文件改写来替代源码编辑。
+- 通过该后备方式编辑后，用 `git diff --check`、`npm test` 和 `npm run check`
+  验证改动；当沙箱化的状态命令仍被拒绝时，用升级权限执行 `git status --short --branch`。
 
-## Workflow
+## 工作流
 
-- Each commit must represent one complete, user-confirmed feature.
-- Do not commit until the user has tested and confirmed the feature.
-- Do not commit at all without explicit approval from the user.
-- Add focused tests for storage validation, account identity, and switch rollback.
-- Run `npm test` and `npm run check` before requesting confirmation.
-- `npm run check` walks `src/` and `scripts/` automatically, so new files are
-  covered without editing a file list.
-- Do not describe a result as implemented or verified until it has been reproduced
-  through code, tests, or the real loopback/remote API.
+- 每个提交必须代表一个完整的、用户确认的功能。
+- 在用户测试并确认该功能之前不要提交。
+- 未经用户明确批准绝不提交。
+- 为存储校验、账号身份和切换回滚添加聚焦的测试。
+- 在请求确认前运行 `npm test` 和 `npm run check`。
+- `npm run check` 会自动遍历 `src/` 和 `scripts/`，所以新文件无需编辑文件列表
+  即被覆盖。
+- 在结果经由代码、测试或真实的回环/远程 API 复现之前，不要把它描述为已实现或已验证。
