@@ -99,6 +99,8 @@ var
   TraeSourceLabel: TNewStaticText;
   TraeStatusLabel: TNewStaticText;
   UseDetectedButton: TNewButton;
+  ReinstallPromptPage: TInputOptionWizardPage;
+  AlreadyInstalled: Boolean;
   DetectedTraePath: String;
   SavedTraePath: String;
   KeepUserData: Boolean;
@@ -285,6 +287,23 @@ end;
 
 procedure InitializeWizard();
 begin
+  { 已安装时先让用户决定是重新安装还是退出，避免覆盖时误操作。 }
+  { 不能用 ExpandConstant 的 app 常量：app 常量在 InitializeWizard 阶段尚未初始化会直接抛错。 }
+  { WizardDirValue 在任意时刻都安全，且会反映真实目标目录（含 previous dir）。 }
+  AlreadyInstalled := FileExists(AddBackslash(WizardDirValue) + '{#ProductExe}');
+  ReinstallPromptPage := CreateInputOptionPage(
+    wpWelcome,
+    '检测到已安装版本',
+    '是否重新安装？',
+    '检测到这台电脑上已经安装了 ' + '{#ProductName}' + '。' + #13#10#13#10 +
+    '「重新安装」将升级到当前版本，并保留账号数据与配置。' + #13#10 +
+    '「取消」将直接退出安装，保持现有版本不变。',
+    True, False
+  );
+  ReinstallPromptPage.Add('重新安装（升级并保留数据）');
+  ReinstallPromptPage.Add('取消，保持现有版本');
+  ReinstallPromptPage.SelectedValueIndex := 0;
+
   TraePage := CreateInputFilePage(
     wpSelectDir,
     'TRAE SOLO CN 位置',
@@ -345,11 +364,23 @@ begin
   UpdateTraeStatus();
 end;
 
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := False;
+  if PageID = ReinstallPromptPage.ID then
+    Result := (not AlreadyInstalled) or WizardSilent;
+end;
+
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
   if CurPageID = TraePage.ID then
-    Result := ValidateTraeSelection();
+    Result := ValidateTraeSelection()
+  else if CurPageID = ReinstallPromptPage.ID then
+  begin
+    if ReinstallPromptPage.SelectedValueIndex = 1 then
+      Abort();
+  end;
 end;
 
 { 覆盖安装时必须先停止旧版本服务；Windows 会锁定正在运行的 exe，
