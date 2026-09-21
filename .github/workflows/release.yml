@@ -96,7 +96,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
-          $docs = "docs/releases/${{ steps.ver.outputs.version }}.md"
+          $docs = "docs/releases/v${{ steps.ver.outputs.version }}.md"
           if (-not (Test-Path -LiteralPath $docs -PathType Leaf)) {
             throw "release notes not found: $docs"
           }
