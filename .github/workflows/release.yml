@@ -66,19 +66,17 @@ jobs:
         shell: pwsh
         run: |
           $version = '${{ steps.ver.outputs.version }}'
-          $expected = @(
-            "TraeEnhancer-Setup-$version.exe",
-            "TraeEnhancer-Portable-$version.zip"
+          # 只断言两个目标产物存在；dist/ 根下 build-exe 的中间文件不参与比对
+          $paths = @(
+            "dist\installer\TraeEnhancer-Setup-$version.exe",
+            "dist\TraeEnhancer-Portable-$version.zip"
           )
-          $actual = @(
-            @(Get-ChildItem -LiteralPath dist\installer -File | ForEach-Object Name) +
-            @(Get-ChildItem -LiteralPath dist -File | ForEach-Object Name)
-          )
-          $missing = Compare-Object $expected $actual
-          if ($missing.Count -gt 0) {
-            throw "artifacts mismatch, expected [$($expected -join ', ')], got [$($actual -join ', ')]"
+          foreach ($p in $paths) {
+            if (-not (Test-Path -LiteralPath $p -PathType Leaf)) {
+              throw "missing artifact: $p"
+            }
           }
-          echo "artifacts ok: $($actual -join ', ')"
+          echo "artifacts ok: $($paths -join ', ')"
 
       - name: List artifacts
         shell: bash
