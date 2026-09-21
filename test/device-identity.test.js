@@ -70,6 +70,18 @@ test("deviceIdentityRecord carries exactly the persisted fields", () => {
   assert.equal(record.publicKeyPEM, identity.publicKeyPEM);
 });
 
+test("deviceIdentityRecord serializes a login context whose PEMs live in keyPair", () => {
+  const identity = mintDeviceIdentity();
+  const context = applyDeviceIdentity({}, identity);
+  delete context.privateKeyPEM;
+  delete context.publicKeyPEM;
+  // context carries the PEMs inside keyPair (as collectLoginContext does).
+  const record = deviceIdentityRecord(context);
+  assert.equal(record.privateKeyPEM, identity.privateKeyPEM);
+  assert.equal(record.publicKeyPEM, identity.publicKeyPEM);
+  assert.equal(isDeviceIdentity(record), true, "record must be a storeable identity");
+});
+
 test("collectLoginContext reuses a provided identity instead of randomizing", async () => {
   const identity = mintDeviceIdentity();
   const context = await collectLoginContext({

@@ -112,7 +112,7 @@ export function deviceIdentityRecord(identity) {
     deviceBrand: identity.deviceBrand,
     deviceType: identity.deviceType,
     osVersion: identity.osVersion,
-    privateKeyPEM: identity.privateKeyPEM,
-    publicKeyPEM: identity.publicKeyPEM,
+    privateKeyPEM: identity.privateKeyPEM ?? identity.keyPair?.privateKeyPEM,
+    publicKeyPEM: identity.publicKeyPEM ?? identity.keyPair?.publicKeyPEM,
   };
 }
