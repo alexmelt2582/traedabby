@@ -1,6 +1,13 @@
 import crypto from "node:crypto";
 import os from "node:os";
 
+import { parseIcubesValue } from "./trae-crypto.js";
+
+// Local prefix (matches trae-storage traeStorageKeys.DEVICE_PREFIX). Kept here to
+// avoid a top-level circular import: trae-storage imports isDeviceIdentity from
+// this module, so importing it back would touch traeStorageKeys before it is set.
+const DEVICE_PREFIX = "iCubeAuthInfo://icube-dc:";
+
 /**
  * Account-level device identity.
  *
@@ -54,6 +61,40 @@ export function isDeviceIdentity(value) {
 export function readDeviceIdentity(snapshot) {
   if (!object(snapshot) || !isDeviceIdentity(snapshot.deviceIdentity)) return null;
   return snapshot.deviceIdentity;
+}
+
+/**
+ * Recovers the identity TRAE originally bound to an adopted account, so refresh
+ * keeps the same deviceId as the signing key it already holds. Adopted accounts
+ * carry their TRAE-native device key (`iCubeAuthInfo://icube-dc:<id>`) inside the
+ * snapshot keys but never a top-level `deviceIdentity`; minting a fresh one there
+ * produced a deviceId that did not match the stored signing key (20403). Device
+ * fields that only live in the live machine context are re-read from the host.
+ */
+export function recoverDeviceIdentity(snapshot) {
+  const deviceId = Object.keys(snapshot?.keys ?? {}).find((key) =>
+    key.startsWith(DEVICE_PREFIX),
+  );
+  if (!deviceId) return null;
+  const id = deviceId.slice(DEVICE_PREFIX.length);
+  if (!/^\d{8,24}$/.test(id)) return null;
+  let keyPair = null;
+  try {
+    keyPair = parseIcubesValue(snapshot.keys[deviceId]);
+  } catch {
+    keyPair = null;
+  }
+  if (!keyPair?.privateKeyPEM || !keyPair?.publicKeyPEM) return null;
+  return {
+    deviceId: id,
+    machineId: crypto.randomUUID().replaceAll("-", ""),
+    deviceName: os.hostname() || "PC",
+    deviceBrand: process.env.PROCESSOR_IDENTIFIER || "Windows",
+    deviceType: "windows",
+    osVersion: `${os.type()} ${os.release()}`,
+    privateKeyPEM: keyPair.privateKeyPEM,
+    publicKeyPEM: keyPair.publicKeyPEM,
+  };
 }
 
 /**

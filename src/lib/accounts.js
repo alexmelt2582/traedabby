@@ -3,7 +3,11 @@ import path from "node:path";
 
 import { readJsonFile, stableHash, writeJsonAtomic } from "./json-file.js";
 import { readAuthFromSnapshot } from "./trae-refresh.js";
-import { mintDeviceIdentity, readDeviceIdentity } from "./device-identity.js";
+import {
+  mintDeviceIdentity,
+  readDeviceIdentity,
+  recoverDeviceIdentity,
+} from "./device-identity.js";
 import {
   extractAuthSnapshot,
   extractIdentityFromSnapshot,
@@ -230,19 +234,27 @@ export class AccountStore {
     // Every account carries a fixed device identity no matter how it is added.
     // The OAuth login path supplies one via buildStorageRoot; adopting or
     // syncing the signed-in account reads live TRAE storage which has none. Reuse
-    // a previously-stored identity for this account, otherwise mint a single one —
-    // live storage never carries it, so without this reuse every backup would mint
-    // a brand-new identity and the account would keep changing device.
+    // a previously-stored identity for this account; otherwise recover the one
+    // TRAE bound (so deviceId and its signing key stay paired — minting a fresh
+    // id here mismatches the stored key and breaks refresh with 20403); only when
+    // neither exists mint a single new identity.
     if (!readDeviceIdentity(snapshot)) {
-      let previouslyStored = null;
+      let stored = null;
       try {
-        previouslyStored = readDeviceIdentity(
-          await readJsonFile(snapshotPath, { required: false }),
-        );
+        stored = recoverDeviceIdentity(snapshot);
       } catch {
-        previouslyStored = null;
+        stored = null;
       }
-      snapshot.deviceIdentity = previouslyStored ?? mintDeviceIdentity();
+      if (!stored) {
+        try {
+          stored = readDeviceIdentity(
+            await readJsonFile(snapshotPath, { required: false }),
+          );
+        } catch {
+          stored = null;
+        }
+      }
+      snapshot.deviceIdentity = stored ?? mintDeviceIdentity();
     }
     await fs.mkdir(path.dirname(snapshotPath), { recursive: true });
     await writeJsonAtomic(snapshotPath, snapshot, { mode: 0o600 });

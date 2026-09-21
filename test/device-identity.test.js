@@ -7,8 +7,12 @@ import {
   isDeviceIdentity,
   mintDeviceIdentity,
   readDeviceIdentity,
+  recoverDeviceIdentity,
 } from "../src/lib/device-identity.js";
 import { collectLoginContext } from "../src/lib/trae-product.js";
+import { encryptIcubesValue } from "../src/lib/trae-crypto.js";
+
+const DEVICE_PREFIX = "iCubeAuthInfo://icube-dc:";
 
 test("minted identity is complete, stable-shaped and key-pair backed", () => {
   const identity = mintDeviceIdentity();
@@ -105,4 +109,30 @@ test("collectLoginContext mints a fixed identity with a key pair when none is gi
   assert.ok(context.keyPair?.privateKeyPEM, "login context carries a private key");
   assert.ok(context.keyPair?.publicKeyPEM, "login context carries a public key");
   assert.equal(context.deviceType, "windows");
+});
+
+test("recoverDeviceIdentity restores the TRAE-bound id and key pair from an adopted snapshot", () => {
+  const original = mintDeviceIdentity();
+  const snapshot = {
+    schemaVersion: 1,
+    keys: {
+      [DEVICE_PREFIX + original.deviceId]: encryptIcubesValue({
+        privateKeyPEM: original.privateKeyPEM,
+        publicKeyPEM: original.publicKeyPEM,
+      }),
+    },
+  };
+  const recovered = recoverDeviceIdentity(snapshot);
+  assert.ok(recovered, "recovers an identity");
+  assert.equal(recovered.deviceId, original.deviceId, "keeps the TRAE-bound deviceId");
+  assert.equal(recovered.privateKeyPEM, original.privateKeyPEM, "keeps the same private key");
+  assert.equal(recovered.publicKeyPEM, original.publicKeyPEM, "keeps the same public key");
+  assert.equal(isDeviceIdentity(recovered), true, "recovered identity is storeable and valid");
+});
+
+test("recoverDeviceIdentity returns null when no TRAE device key is present", () => {
+  assert.equal(recoverDeviceIdentity({}), null);
+  assert.equal(recoverDeviceIdentity({ keys: {} }), null);
+  assert.equal(recoverDeviceIdentity({ keys: { other: "x" } }), null);
+  assert.equal(recoverDeviceIdentity(undefined), null);
 });
