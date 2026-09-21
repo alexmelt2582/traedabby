@@ -71,7 +71,7 @@ jobs:
             "TraeEnhancer-Portable-$version.zip"
           )
           $actual = @(
-            @(Get-ChildItem -LiteralPath dist\installer -File | ForEach-Object Name),
+            @(Get-ChildItem -LiteralPath dist\installer -File | ForEach-Object Name) +
             @(Get-ChildItem -LiteralPath dist -File | ForEach-Object Name)
           )
           $missing = Compare-Object $expected $actual
