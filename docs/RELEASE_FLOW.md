@@ -1,8 +1,8 @@
-# 本地 AI 开发与自动发布流程文档
+# 本地 AI 开发与本地发布流程文档
 
-> **适用场景**：你在本地使用 AI 开发项目，AI 完成编码后生成发布包，你本地验收，验收通过后 AI 自动发布到 GitHub。  
-> **核心原则**：`main` 始终可部署；功能在短分支开发；本地验收是唯一人工门禁；发布 = 打标签 + 推送 + 自动创建 Release；无需 `release/*`、`develop` 等长期分支。  
-> **版本**：1.0
+> **适用场景**：你在本地使用 AI 开发项目，AI 完成编码后生成发布包，你本地验收，验收通过后 AI 在本地打包、打标签、推送并创建 GitHub Release。  
+> **核心原则**：`main` 始终可部署；功能在短分支开发；本地验收是唯一人工门禁；发布 = 本地打包 + 打标签 + 推送 + 本地创建 Release；不使用 GitHub Actions，无需 `release/*`、`develop` 等长期分支。  
+> **版本**：1.1
 
 ---
 
@@ -13,7 +13,8 @@
 - 发布**不需要** `release/*` 分支，直接在 `main` 上打语义化标签（如 `v1.2.0`）。
 - 本地验收是**唯一强制的人工环节**，验收通过后 AI 才能执行发布。
 - 发布版本代码通过 **Git tag** 永久保存，随时可查。
-- 推荐使用 **GitHub Actions** 监听标签推送，自动完成构建、打包、创建 Release。
+- 构建、打包、创建 Release 全部在本地完成（`npm run release:pack` / `npm run release:publish`），不使用 GitHub Actions。
+- 发布说明 `docs/releases/vX.Y.Z.md` 必须在打标签**之前**提交，标签指向的提交才会自带该版本说明。
 - AI 执行 Git 操作时必须遵守 `ivangdavila/git` 的安全规则。
 - 所有提交信息遵循 **Conventional Commits**。
 - 版本号遵循 **SemVer**：`vMAJOR.MINOR.PATCH`。
@@ -122,13 +123,13 @@ git tag -a v1.2.0 -m "Release v1.2.0"
 你的工作流分为五个阶段：
 
 ```text
-[1. AI 本地开发] → [2. AI 生成发布包] → [3. 你本地验收]
+[1. AI 本地开发] → [2. AI 生成验收包] → [3. 你本地验收]
                                               ↓
                                       验收不通过 → 回到 [1]
                                               ↓
-                                      验收通过 → [4. 你说"发布"]
+                                      验收通过 → [4. AI 打包 + 写发布说明 + 提交]
                                               ↓
-                                      [5. AI 自动发布到 GitHub]
+                                      [5. AI 合并 + 打标签 + 推送 + 创建 Release]
 ```
 
 ### 阶段 1：AI 本地开发
@@ -159,29 +160,25 @@ gh pr create --base main --head feature/user-login \
   --body "## 变更说明\n新增用户登录表单。"
 ```
 
-### 阶段 2：AI 生成发布包
+### 阶段 2：AI 生成验收包
 
 **你的操作**：对 AI 说“帮我打包，我要验收”。
 
 **AI 执行**：
 
 ```bash
-# 确保工作区干净
-git status --short
+# 便携版单文件
+npm run build:exe
 
-# 构建项目
-npm run build          # 或对应项目的构建命令
-
-# 生成发布包
-tar -czf release-v0.1.0.tar.gz ./dist
-# 或
-zip -r release-v0.1.0.zip ./dist
+# 安装包（需要本机已安装 Inno Setup 6）
+npm run build:installer
 ```
 
-AI 应告诉你发布包路径，例如：
+这一步只是给你验收用，产物落在 `dist/portable/` 与 `dist/installer/`，都不进 Git。
+AI 应告诉你产物路径，例如：
 
 ```text
-✅ 发布包已生成：./release-v0.1.0.tar.gz
+✅ 验收包已生成：dist/installer/TraeEnhancer-Setup-1.2.0.exe
 请验收。
 ```
 
@@ -201,12 +198,29 @@ AI 应告诉你发布包路径，例如：
 
 你对 AI 说：“验收通过，发布 v0.1.0。”
 
-### 阶段 4：AI 自动发布（合并 + 打标签 + 推送）
+### 阶段 4：AI 打包并写发布说明（仍在功能分支上）
 
 **AI 执行**：
 
 ```bash
-# 1. 检查工作区干净
+# 1. 构建便携版与安装包，并汇总到 dist/release/
+npm run release:pack
+
+# 2. 编写发布说明 docs/releases/v0.1.0.md（“本次更新”“已知限制”）
+# 3. 提交发布说明
+git add docs/releases/v0.1.0.md
+git commit -m "docs(release): 补充 v0.1.0 发布说明"
+```
+
+发布说明必须在打标签**之前**提交，这样标签指向的提交自带该版本说明。`dist/` 是本地状态，
+产物不提交，也不随标签走。
+
+### 阶段 5：合并、打标签、推送并创建 Release
+
+**AI 执行**：
+
+```bash
+# 1. 检查已跟踪文件都已提交
 git status --short
 
 # 2. 切换到 main 并拉取最新
@@ -222,133 +236,70 @@ git push origin main
 # 5. 创建附注标签
 git tag -a v0.1.0 -m "Release v0.1.0"
 
-# 6. 推送标签（触发 GitHub Actions）
+# 6. 推送标签
 git push origin v0.1.0
 
-# 7. 删除功能分支
+# 7. 创建 Release 并上传 dist/release/ 下的产物（以 docs/releases/v0.1.0.md 为正文）
+npm run release:publish
+
+# 8. 删除功能分支
 git branch -d feature/user-login
 git push origin --delete feature/user-login
 ```
 
-**如果使用了 GitHub Actions**，到这里 AI 的工作就结束了，后续由 Actions 自动完成。
+`npm run release:publish` 在创建 Release 前逐项校验，任何一项不通过都会中止并说明原因：
 
-**如果没有使用 Actions**，AI 继续执行：
+| 校验 | 作用 |
+| :--- | :--- |
+| 发布说明存在且非空 | 避免发出空正文的 Release |
+| `dist/release/` 产物齐全 | 避免上传不完整或跨版本的产物 |
+| 已跟踪文件无未提交改动 | 保证标签指向的是已提交、已审阅的代码 |
+| 本地标签指向当前 HEAD | 保证产物与将要发布的提交一致 |
+| origin 上的标签与本地是同一个标签对象 | 避免把 Release 挂到过期或被移动的标签上 |
+| `gh` 已登录、Release 尚不存在 | 避免认证失败，也不覆盖已有发布 |
 
-```bash
-# 创建 GitHub Release 并上传本地打包好的文件
-gh release create v0.1.0 ./release-v0.1.0.tar.gz \
-  --title "v0.1.0" \
-  --generate-notes
-```
-
-### 阶段 5：GitHub Actions 自动发布（推荐）
-
-见下一节。
+加 `--dry-run` 只执行上述校验并打印将要运行的 `gh` 命令，不创建任何东西。
 
 ---
 
-## 4. GitHub Actions 自动化（推荐）
+## 4. 本地发布
 
-**结论：是的，用 GitHub Actions 更好。** 原因：
+本项目**不使用 GitHub Actions**，`.github/workflows` 已移除。发布所需的构建、打包、创建 Release
+全部在本地完成。原因很直接：这个项目只在 Windows 上构建（单可执行文件 + Inno Setup），
+用云端 runner 复现同一套环境反而更容易出偏差，而本地打包天然就是你验收过的那台机器。
 
-| 对比项 | AI 本地打包 + 手动发布 | GitHub Actions 自动发布 |
-| :--- | :--- | :--- |
-| 依赖 AI 本地环境 | 是，环境不一致会导致包不一致 | 否，环境统一 |
-| AI 需要执行 `gh release create` | 是 | 否，只需推送标签 |
-| 发布流程可追溯 | 依赖 AI 日志 | Actions 日志永久保存 |
-| 多人协作 | 差 | 好 |
-| 安全性 | AI 需要 GitHub Token 写权限 | Token 只在 Actions 中使用 |
-| 可重复性 | 低 | 高 |
-
-**推荐架构**：
+**发布架构**：
 
 ```text
-AI 本地开发 → AI 本地打包 → 你验收
-                                  ↓
-                          验收通过 → AI 打标签 + 推送
-                                  ↓
-                          GitHub Actions 自动构建、打包、创建 Release
+AI 本地开发 → AI 本地生成验收包 → 你验收
+                                      ↓
+                              验收通过 → AI 打包到 dist/release/ + 写发布说明 + 提交
+                                      ↓
+                              AI 合并 main + 打标签 + 推送 + 创建 Release 并上传产物
 ```
 
-这样，AI 只需要做两件事：**打标签** 和 **推送标签**。构建、打包、发布全部由 GitHub Actions 完成。
+### 4.1 两个命令
 
-### 4.1 Actions 工作流配置
+| 命令 | 作用 | 何时执行 |
+| :--- | :--- | :--- |
+| `npm run release:pack` | 构建便携版与安装包，汇总到 `dist/release/` | 验收通过后，在功能分支上，提交发布说明之前 |
+| `npm run release:publish` | 校验并创建 GitHub Release，上传 `dist/release/` 下的产物 | 标签已推送到 origin 之后 |
 
-创建 `.github/workflows/release.yml`：
+两个命令都只做本地动作或调用 `gh`，不触发任何云端构建。`release:publish --dry-run`
+可以先只跑校验。
 
-```yaml
-name: Release
+### 4.2 发布说明
 
-on:
-  push:
-    tags:
-      - 'v*'
+- 路径固定为 `docs/releases/vX.Y.Z.md`，`x.y.z` 必须与 `package.json` 的版本一致。
+- 正文直接作为 Release 正文，`gh release create --notes-file` 读取它，与之前 Actions 的行为一致。
+- 它必须在打标签之前提交，否则标签指向的提交里没有这份说明。
+- 结构参考已有文件：标题 + 发布日期 + 发布类型 + `## 本次更新` + `## 已知限制`。
 
-permissions:
-  contents: write
+### 4.3 如何查看发布结果
 
-jobs:
-  release:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build
-        run: npm run build
-
-      - name: Package
-        run: tar -czf release-${{ github.ref_name }}.tar.gz ./dist
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: release-${{ github.ref_name }}.tar.gz
-          generate_release_notes: true
-          draft: false
-          prerelease: false
-```
-
-### 4.2 工作流说明
-
-| 步骤 | 作用 |
-| :--- | :--- |
-| `on.push.tags: v*` | 只有推送 `v` 开头的标签时触发 |
-| `permissions.contents: write` | 允许创建 Release |
-| `actions/checkout` | 检出标签对应的代码 |
-| `setup-node` | 配置 Node 环境（按项目调整） |
-| `npm ci` | 安装依赖 |
-| `npm run build` | 构建 |
-| `tar -czf` | 打包 |
-| `softprops/action-gh-release` | 创建 Release 并上传资产 |
-| `generate_release_notes` | 自动生成 Release Notes |
-
-### 4.3 AI 只需要执行
-
-```bash
-git checkout main
-git pull origin main
-git merge --no-ff feature/user-login -m "merge: feature/user-login"
-git push origin main
-git tag -a v0.1.0 -m "Release v0.1.0"
-git push origin v0.1.0
-```
-
-推送标签后，GitHub Actions 自动完成剩余工作。
-
-### 4.4 如何查看发布结果
-
-- GitHub 仓库 → `Actions` 标签页 → 查看工作流运行日志
-- GitHub 仓库 → `Releases` 页面 → 查看已创建的 Release 和上传的资产
+- GitHub 仓库 → `Releases` 页面 → 查看已创建的 Release 与上传的产物
+- 本地 `dist/release/` → 查看本次实际打包出来的文件（脚本运行时会打印清单）
+- 发布过程没有云端日志，AI 会把每一步的命令与输出贴出来，必要时自行复核
 
 ---
 
@@ -389,7 +340,7 @@ git switch --detach v0.1.0
 ### 5.3 下载发布版本源码
 
 - 仓库 → `Releases` → 选择版本 → `Source code (zip)` / `Source code (tar.gz)`
-- 或下载 Actions 上传的构建产物
+- 或下载 Release 页面上传的构建产物
 
 ### 5.4 对比版本差异
 
@@ -431,7 +382,13 @@ git push origin main
 
 git tag -a v0.1.1 -m "Release v0.1.1"
 git push origin v0.1.1
+
+# 补丁版同样要创建 Release
+npm run release:publish
 ```
+
+补丁版也要先把 `package.json` 版本改为 `0.1.1`、运行 `npm run release:pack`、写好
+`docs/releases/v0.1.1.md` 并提交，再合并打标签——顺序与正式发布相同。
 
 ### 6.4 清理
 
@@ -454,7 +411,7 @@ git branch --show-current   # 确认当前分支
 git fetch origin
 ```
 
-遇到冲突、CI 失败、权限不足时，停止并请求人工处理。
+遇到冲突、校验失败、权限不足时，停止并请求人工处理。
 
 ### 7.2 触发词与动作映射
 
@@ -462,9 +419,9 @@ git fetch origin
 | :--- | :--- |
 | “新增功能：xxx” | 从 `main` 创建 `feature/xxx`，开发，提交，推送，创建 PR 到 `main` |
 | “修复：xxx” | 从 `main` 创建 `fix/xxx`，修复，提交，推送，创建 PR 到 `main` |
-| “打包，我要验收” | 执行构建和打包命令，生成发布包，告诉用户路径 |
-| “验收通过，发布 vX.Y.Z” | 合并功能分支到 `main`，推送 `main`，打标签，推送标签 |
-| “热修复：xxx” | 从旧标签创建 `hotfix/vX.Y.Z`，修复，合并 `main`，打补丁标签 |
+| “打包，我要验收” | 运行 `build:exe` / `build:installer`，告诉用户产物路径 |
+| “验收通过，发布 vX.Y.Z” | `npm run release:pack` → 写并提交发布说明 → 合并 `main`、推送、打标签、推送标签 → `npm run release:publish` |
+| “热修复：xxx” | 从旧标签创建 `hotfix/vX.Y.Z`，修复，合并 `main`，打补丁标签，再走同一发布流程 |
 
 ### 7.3 AI 禁止事项
 
@@ -490,8 +447,8 @@ gh release list
 # 查看某个 Release
 gh release view v1.0.0
 
-# 手动创建 Release（如果不用 Actions）
-gh release create v1.0.0 ./release.tar.gz --title "v1.0.0" --generate-notes
+# 手动创建 Release（本项目的发布脚本就会执行这一步）
+gh release create v1.0.0 ./path/to/artifact --title "v1.0.0" --notes-file docs/releases/v1.0.0.md
 ```
 
 ---
@@ -557,13 +514,13 @@ integration_style: merge
 
 ### 发布前
 - [ ] 用户已明确说“验收通过，发布”
-- [ ] `main` 最新且 CI 通过
+- [ ] `main` 最新且 `npm test`、`npm run check` 通过
+- [ ] 发布说明 `docs/releases/vX.Y.Z.md` 已写好并提交
 - [ ] 版本号符合 SemVer
 - [ ] 标签名称正确
 
 ### 发布后
 - [ ] 标签已推送
-- [ ] GitHub Actions 运行成功（如使用）
 - [ ] GitHub Release 已创建
 - [ ] 构建产物已上传
 - [ ] 相关 Issue 已关闭
@@ -575,8 +532,8 @@ integration_style: merge
 | 场景 | 起点 | 目标 | 命令摘要 |
 | :--- | :--- | :--- | :--- |
 | 新增功能 | `main` | `feature/*` | `git checkout -b feature/xxx main` |
-| 打包验收 | 功能分支 | 本地发布包 | `npm run build && tar -czf release.tar.gz ./dist` |
-| 验收通过发布 | 功能分支 | `main` + tag | `git checkout main && git merge feature/xxx && git tag -a vX.Y.Z` |
+| 打包验收 | 功能分支 | 本地验收包 | `npm run build:exe && npm run build:installer` |
+| 验收通过发布 | 功能分支 | `main` + tag + Release | `npm run release:pack` → 写说明并提交 → `git checkout main && git merge feature/xxx && git tag -a vX.Y.Z && git push origin main vX.Y.Z` → `npm run release:publish` |
 | 热修复 | 旧标签 | `main` + 新 tag | `git checkout -b hotfix/vX.Y.Z vX.Y.Z` |
 | 查看发布版本 | - | tag | `git checkout vX.Y.Z` |
 | 对比版本 | - | - | `git diff v1.0.0 v1.1.0` |
@@ -652,13 +609,16 @@ gh release view v1.0.0
 
 **能。** 通过 tag（如 `v1.0.0`）永久指向发布 commit。可以本地 checkout，也可以在 GitHub 上浏览或下载源码。
 
-### Q3：用 GitHub Actions 更好吗？
+### Q3：为什么不用 GitHub Actions？
 
-**是的。** Actions 可以统一构建环境，AI 只需推送标签，构建、打包、发布全部自动完成。可重复性、可追溯性、安全性都更好。
+**因为这个项目只在 Windows 上构建。** 它要打出单可执行文件（Node SEA）并用 Inno Setup 生成安装包，
+云端 runner 复现这套环境更容易出偏差；本地打包用的就是你验收过的那台机器，产物与验收内容一致。
+Actions 方案此前也确实频繁在构建环境与产物环节出问题，所以已整体移除。
 
 ### Q4：AI 需要 GitHub Token 吗？
 
-如果使用 GitHub Actions，AI 只需要 `git push` 权限，不需要 `gh release create` 权限。Token 只在 Actions 中使用，更安全。
+需要本机 `gh` 已登录（`gh auth login`），因为它要执行 `gh release create` 上传产物。
+发布脚本会先确认 `gh` 可用且已登录，未登录时会直接中止。
 
 ### Q5：验收不通过怎么办？
 
