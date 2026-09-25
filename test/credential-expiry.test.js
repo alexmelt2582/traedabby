@@ -29,7 +29,39 @@ test("keep-alive exchanges the credential only when it is about to expire", () =
 
 test("the daemon records the real rotation outcome instead of assuming one", () => {
   assert.match(daemonSource, /tokenRefreshed: refreshed\.refreshedToken,/);
-  assert.doesNotMatch(daemonSource, /tokenRefreshed: true,/);
+  const renew = daemonSource.match(/async function renewOneAccount\(account\) \{[\s\S]*?\n\}/);
+  assert.ok(renew, "renewOneAccount was not found");
+  // The manual renew is the one place that exchanges on purpose, so `true` there
+  // is a record of what it just did. Everywhere else reports the sweep's outcome.
+  assert.match(renew[0], /tokenRefreshed: true,/);
+  assert.doesNotMatch(daemonSource.replace(renew[0], ""), /tokenRefreshed: true,/);
+});
+
+test("a manual renewal reports an unchanged expiry rather than claiming a renewal", () => {
+  const renew = daemonSource.match(/async function renewOneAccount\(account\) \{[\s\S]*?\n\}/)[0];
+  assert.match(renew, /const previousExpiresAt = before\.expiredAt \|\| null;/);
+  assert.match(
+    renew,
+    /const renewed = !!accessExpiresAt && accessExpiresAt !== previousExpiresAt;/,
+  );
+  // It exchanges unconditionally: the expiry gate belongs to the background sweep,
+  // and a user asking for a renewal is the explicit decision to rotate now.
+  assert.match(renew, /await refreshAuthSnapshot\(snapshot\)/);
+  assert.doesNotMatch(renew, /refreshAuthSnapshotIfNeeded/);
+  // The user only ever sees the date that decides whether the account still works.
+  assert.match(renew, /accessExpiresAt,/);
+});
+
+test("a manual renewal refuses when the live session cannot be accounted for", () => {
+  const route = daemonSource.match(/pathname === "\/api\/accounts\/renew"[\s\S]*?\n  \}/);
+  assert.ok(route, "the renew route was not found");
+  // Rotating while the live identity cannot be read could invalidate a session we
+  // cannot see, so the action is refused rather than guessed at.
+  assert.match(route[0], /active\.state === "unknown"/);
+  // The same Cockpit Tools guard the sweep follows, because this path always rotates.
+  assert.match(route[0], /const cockpit = await resolveCockpitPolicy\(\);/);
+  // The account TRAE is using right now is maintained by TRAE itself.
+  assert.match(route[0], /active\.id === accountId/);
 });
 
 test("the daemon stores both expiry fields on the keep-alive record", () => {

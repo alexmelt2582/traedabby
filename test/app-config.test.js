@@ -5,11 +5,13 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  APP_UPDATE_DEFAULTS,
   CHECKIN_DEFAULTS,
   CHECKIN_INTERVALS,
   CONFIG_FILE_NAME,
   configPath,
   loadAppConfig,
+  normalizeAppUpdate,
   normalizeCheckin,
   normalizeCheckinInterval,
   normalizeConfig,
@@ -23,6 +25,7 @@ const DEFAULTS = {
   traeExe: null,
   traeUpdate: DEFAULT_TRAE_UPDATE,
   checkin: CHECKIN_DEFAULTS,
+  appUpdate: APP_UPDATE_DEFAULTS,
 };
 
 test("a missing or empty trae path normalizes to null", () => {
@@ -102,7 +105,35 @@ test("a bad check-in entry falls back instead of failing the whole file", () => 
 test("a configuration written before the check-in block existed gains the defaults", () => {
   const migrated = normalizeConfig({ traeExe: null });
   assert.deepEqual(migrated.checkin, CHECKIN_DEFAULTS);
+  assert.deepEqual(migrated.appUpdate, APP_UPDATE_DEFAULTS);
   assert.equal(Object.hasOwn(migrated, "proxy"), false);
+});
+
+test("the assistant update check defaults to on and only rejects a wrong container", () => {
+  assert.deepEqual(normalizeAppUpdate(null), APP_UPDATE_DEFAULTS);
+  assert.deepEqual(normalizeAppUpdate(undefined), APP_UPDATE_DEFAULTS);
+  assert.deepEqual(normalizeAppUpdate({}), APP_UPDATE_DEFAULTS);
+  assert.deepEqual(normalizeAppUpdate({ autoCheck: false }), { autoCheck: false });
+  // Strings arrive back through JSON, so they are read like the check-in flags.
+  assert.deepEqual(normalizeAppUpdate({ autoCheck: "off" }), { autoCheck: false });
+  assert.deepEqual(normalizeAppUpdate({ autoCheck: "on" }), { autoCheck: true });
+  // A bad value falls back rather than refusing to start; the panel echoes the
+  // effective value back on every read, so the fallback is never hidden.
+  assert.deepEqual(normalizeAppUpdate({ autoCheck: "maybe" }), APP_UPDATE_DEFAULTS);
+  assert.throws(() => normalizeAppUpdate([]), /must be a JSON object/);
+});
+
+test("the assistant update check is a namespace of its own", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "trae-config-"));
+  try {
+    await saveAppConfig(dir, { appUpdate: { autoCheck: false } });
+    const loaded = await loadAppConfig(dir);
+    // TRAE's own updater is a different program with a different setting.
+    assert.deepEqual(loaded.appUpdate, { autoCheck: false });
+    assert.deepEqual(loaded.traeUpdate, DEFAULT_TRAE_UPDATE);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("a malformed configuration file is rejected instead of ignored", () => {

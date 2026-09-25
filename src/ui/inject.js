@@ -10,6 +10,10 @@
   // panel is a pure view, so this is how a background sweep reaches an already
   // open panel without a polling loop on this side.
   const ACCOUNTS_UPDATED_EVENT = "trae-enhancer:accounts-updated";
+  // Dispatched by the daemon when its scheduled check finds a newer release, so
+  // the About tab can show the dot without the panel ever polling GitHub (the
+  // workbench CSP would block that request anyway).
+  const UPDATE_AVAILABLE_EVENT = "trae-enhancer:update-available";
 
   window.__traeEnhancerCleanup?.();
   document.getElementById(ROOT_ID)?.remove();
@@ -169,6 +173,20 @@
     #${ROOT_ID} .te-tab.active {
       color: var(--te-accent-fg);
       background: var(--te-accent);
+    }
+
+    /* A release found by a background check has to be visible from the account
+       tab, so the dot lives on the tab rather than inside the About pane. */
+    #${ROOT_ID} .te-tab { position: relative; }
+    #${ROOT_ID} .te-tab-dot {
+      position: absolute;
+      top: 5px;
+      right: 7px;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #ef4444;
+      box-shadow: 0 0 0 2px var(--te-panel-solid);
     }
 
     #${ROOT_ID} .te-content {
@@ -1000,6 +1018,64 @@
 
     #${ROOT_ID} .te-danger:disabled { opacity: .5; }
     #${ROOT_ID} .te-acc-delete:hover { color: #ef4444; }
+    #${ROOT_ID} .te-acc-renew:hover { color: var(--te-accent); }
+
+    /* About: the update card sits above the guide. */
+    #${ROOT_ID} .te-update-card {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid var(--te-border);
+      border-radius: 11px;
+      background: var(--te-surface);
+    }
+    #${ROOT_ID} .te-update-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    #${ROOT_ID} .te-update-version { font-size: 13px; font-weight: 700; }
+    #${ROOT_ID} .te-update-state {
+      margin: 0;
+      color: var(--te-muted);
+      font-size: 11px;
+      line-height: 1.6;
+    }
+    #${ROOT_ID} .te-update-notes {
+      display: grid;
+      gap: 7px;
+      max-height: 200px;
+      overflow: auto;
+      padding: 10px;
+      border: 1px solid var(--te-border);
+      border-radius: 9px;
+      background: var(--te-panel-solid);
+    }
+    #${ROOT_ID} .te-update-notes h4 { margin: 3px 0 0; font-size: 11.5px; }
+    #${ROOT_ID} .te-update-notes p,
+    #${ROOT_ID} .te-update-notes li {
+      margin: 0;
+      color: var(--te-muted);
+      font-size: 11px;
+      line-height: 1.6;
+    }
+    #${ROOT_ID} .te-update-notes ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
+    #${ROOT_ID} .te-update-notes code {
+      padding: 1px 4px;
+      border-radius: 4px;
+      background: var(--te-surface-hover);
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 10.5px;
+    }
+    #${ROOT_ID} .te-update-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    #${ROOT_ID} .te-update-steps {
+      margin: 0;
+      padding-left: 16px;
+      color: var(--te-muted);
+      font-size: 10.5px;
+      line-height: 1.7;
+    }
 
     /* About is now a short user guide, but keeps the original panel skin. */
     #${ROOT_ID} .te-help { display: grid; gap: 16px; }
@@ -1039,7 +1115,6 @@
     }
     #${ROOT_ID} .te-help-note-wrap strong { font-size: 12px; }
     #${ROOT_ID} .te-help-details summary { color: var(--te-text); font-size: 12px; font-weight: 650; cursor: pointer; }
-    #${ROOT_ID} .te-help-version { color: var(--te-muted); font-size: 10px; }
 
     @media (max-width: 420px) {
       #${ROOT_ID} .te-settings-shell { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
@@ -1097,6 +1172,7 @@
         <path d="M12 16v-4M12 8h.01"/>
       </svg>
       <span>关于</span>
+      <span class="te-tab-dot" hidden></span>
     </button>
   `;
 
@@ -1164,6 +1240,23 @@
         <h2>切换账号，不用反复扫码</h2>
         <p>账号信息只保存在这台电脑。需要时切换，平时自动维护，不会把数据上传到别处。</p>
       </header>
+      <section class="te-update-card">
+        <div class="te-update-head">
+          <span class="te-update-version">助手版本 v${APP_VERSION}</span>
+          <span class="te-badge te-update-badge">未检查</span>
+        </div>
+        <p class="te-update-state"></p>
+        <div class="te-update-notes" hidden></div>
+        <ol class="te-update-steps" hidden>
+          <li>点「立即升级」打开 GitHub 发布页，下载并安装新版。</li>
+          <li>装好后回到 TRAE，点「重载界面」，面板就会换成新版。</li>
+        </ol>
+        <div class="te-update-actions">
+          <button class="te-primary te-update-open" type="button" hidden>立即升级</button>
+          <button class="te-secondary te-update-check" type="button">检查更新</button>
+          <button class="te-secondary te-update-reload" type="button" hidden>重载界面</button>
+        </div>
+      </section>
       <div class="te-help-steps">
         <article class="te-help-step">
           <span class="te-help-step-num">1</span>
@@ -1196,9 +1289,19 @@
         <summary>数据安全</summary>
         <p>导出后的账号是一份搬迁副本，不是共享账号。原设备继续使用或更新登录信息后，另一台设备上的副本可能失效，需要重新登录。</p>
       </details>
-      <footer class="te-help-version">TRAE SOLO CN Enhancer v${APP_VERSION}</footer>
     </div>
   `;
+
+  const updateTabDot = tabs.querySelector(".te-tab-dot");
+  const updateUi = {
+    badge: aboutPane.querySelector(".te-update-badge"),
+    state: aboutPane.querySelector(".te-update-state"),
+    notes: aboutPane.querySelector(".te-update-notes"),
+    steps: aboutPane.querySelector(".te-update-steps"),
+    open: aboutPane.querySelector(".te-update-open"),
+    check: aboutPane.querySelector(".te-update-check"),
+    reload: aboutPane.querySelector(".te-update-reload"),
+  };
 
   const settingsPane = document.createElement("div");
   settingsPane.className = "te-pane";
@@ -1234,6 +1337,18 @@
             <div class="te-status-list te-trae-status"></div>
             <div class="te-section-actions"><button class="te-primary te-trae-save" type="button">保存</button></div>
             <div class="te-restart-banner te-trae-restart"><span>已保存，重启 TRAE 后生效。</span></div>
+          </div>
+          <div class="te-section">
+            <div class="te-settings-panel-head">
+              <div><h2>助手更新</h2><p>每天检查一次新版本，发现后「关于」页会亮起小红点。只读取公开的发布信息，不涉及账号数据。</p></div>
+              <span class="te-badge te-app-update-badge">未读取</span>
+            </div>
+            <label class="te-field"><span>自动检查</span><select class="te-select te-app-update-auto"><option value="on">开启</option><option value="off">关闭</option></select></label>
+            <div class="te-status-list te-app-update-status"></div>
+            <div class="te-section-actions">
+              <button class="te-primary te-app-update-save" type="button">保存</button>
+              <button class="te-secondary te-app-update-check" type="button">立即检查</button>
+            </div>
           </div>
         </section>
         <section class="te-settings-panel" data-settings-panel="maintenance">
@@ -1316,13 +1431,9 @@
     <div class="te-modal" role="dialog" aria-modal="true" aria-label="删除账号备份">
       <div class="te-modal-title">删除账号备份</div>
       <div class="te-modal-status te-delete-status"></div>
-      <label class="te-field">
-        <span>输入“删除”确认</span>
-        <input class="te-delete-confirm" type="text" autocomplete="off" spellcheck="false" placeholder="删除">
-      </label>
       <div class="te-modal-actions">
         <button class="te-secondary te-delete-cancel" type="button">取消</button>
-        <button class="te-danger te-delete-submit" type="button" disabled>删除</button>
+        <button class="te-danger te-delete-submit" type="button">删除</button>
       </div>
     </div>
   `;
@@ -1640,6 +1751,20 @@
             <path d="M4 17h12"/>
           </svg>
         `;
+        const renew = document.createElement("button");
+        renew.className = "te-icon-btn te-acc-renew";
+        renew.type = "button";
+        renew.title =
+          "续签：现在就换一份新的登录信息，把有效期推后。其他设备上的这个账号需要重新登录。";
+        renew.setAttribute("aria-label", `为 ${account.displayName || "该账号"} 续签`);
+        renew.dataset.accountId = account.id;
+        renew.innerHTML = `
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
+            <path d="M21 3v6h-6"/>
+            <path d="M12 8v4l3 2"/>
+          </svg>
+        `;
         const remove = document.createElement("button");
         remove.className = "te-icon-btn te-acc-delete";
         remove.type = "button";
@@ -1651,7 +1776,7 @@
             <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/>
           </svg>
         `;
-        ops.append(action, remove);
+        ops.append(renew, action, remove);
       }
       row.append(main, ops);
 
@@ -1784,6 +1909,8 @@
     // Read once, then keep whatever the user has typed: re-reading on every tab
     // switch would silently discard an edit in progress.
     if (activeTab === "settings" && !settingsLoaded) loadSettings().catch(() => {});
+    // Only the cached result is read, so switching tabs never reaches the network.
+    if (activeTab === "about") loadAppUpdate().catch(() => {});
   }
 
   function switchSettingsSection(name) {
@@ -1882,6 +2009,11 @@
     checkinClientLoad: settingsPane.querySelector(".te-checkin-clientload"),
     checkinStatus: settingsPane.querySelector(".te-checkin-status"),
     checkinSave: settingsPane.querySelector(".te-checkin-save"),
+    appUpdateBadge: settingsPane.querySelector(".te-app-update-badge"),
+    appUpdateAuto: settingsPane.querySelector(".te-app-update-auto"),
+    appUpdateStatus: settingsPane.querySelector(".te-app-update-status"),
+    appUpdateSave: settingsPane.querySelector(".te-app-update-save"),
+    appUpdateCheck: settingsPane.querySelector(".te-app-update-check"),
   };
   let settingsLoaded = false;
   let traeUpdateNoticeShown = false;
@@ -2068,11 +2200,274 @@
     }
   }
 
+  /* -----------------------------------------------------------------------
+   * Assistant update
+   *
+   * The panel never talks to GitHub itself: the workbench CSP blocks that, and
+   * the daemon already checks once a day. Opening the About tab only reads the
+   * daemon's cached result, and a new release arrives as a pushed event.
+   * --------------------------------------------------------------------- */
+
+  let appUpdateSnapshot = null;
+  let appUpdateConfig = null;
+  let appUpdateBusy = false;
+
+  /**
+   * Renders the small Markdown subset used by release notes.
+   *
+   * Every string comes from GitHub and is therefore untrusted, so nothing is
+   * parsed as HTML — headings, bullets, code and bold text are built as nodes
+   * with `textContent`. Links are shown as text plus their address rather than
+   * an <a>: following one inside the workbench page would navigate the IDE away
+   * from its own UI.
+   */
+  function appendUpdateInline(node, text) {
+    const pattern = /`([^`]+)`|\*\*([^*]+)\*\*|\[([^\]]+)\]\(([^)\s]+)\)/g;
+    let lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(text))) {
+      if (match.index > lastIndex) node.append(text.slice(lastIndex, match.index));
+      if (match[1] !== undefined) {
+        const code = document.createElement("code");
+        code.textContent = match[1];
+        node.append(code);
+      } else if (match[2] !== undefined) {
+        const strong = document.createElement("strong");
+        strong.textContent = match[2];
+        node.append(strong);
+      } else {
+        node.append(`${match[3]} `);
+        const code = document.createElement("code");
+        code.textContent = match[4];
+        node.append(code);
+      }
+      lastIndex = pattern.lastIndex;
+    }
+    if (lastIndex < text.length) node.append(text.slice(lastIndex));
+  }
+
+  function renderUpdateNotes(container, markdown) {
+    container.textContent = "";
+    let list = null;
+    for (const raw of String(markdown || "").split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line) {
+        list = null;
+        continue;
+      }
+      const heading = /^#{1,4}\s+(.*)$/.exec(line);
+      if (heading) {
+        list = null;
+        const element = document.createElement("h4");
+        element.textContent = heading[1];
+        container.append(element);
+        continue;
+      }
+      const bullet = /^[-*+]\s+(.*)$/.exec(line);
+      if (bullet) {
+        if (!list) {
+          list = document.createElement("ul");
+          container.append(list);
+        }
+        const item = document.createElement("li");
+        appendUpdateInline(item, bullet[1]);
+        list.append(item);
+        continue;
+      }
+      list = null;
+      const paragraph = document.createElement("p");
+      appendUpdateInline(paragraph, line);
+      container.append(paragraph);
+    }
+  }
+
+  /**
+   * Paints the About card from one `/api/update` payload.
+   *
+   * A failed check is reported as a failed check, never as "已是最新": the two
+   * look identical to the user otherwise, and only one of them is true.
+   */
+  function renderAppUpdate(update) {
+    if (!update) return;
+    appUpdateSnapshot = update;
+    const hasUpdate = Boolean(update.hasUpdate);
+    const latest = update.latest;
+    updateTabDot.hidden = !hasUpdate;
+
+    let tone = "";
+    let badge = "未检查";
+    if (hasUpdate) {
+      badge = `有新版 v${latest.version}`;
+      tone = " warn";
+    } else if (update.error) {
+      badge = "检查失败";
+      tone = " warn";
+    } else if (update.checkedAt) {
+      badge = "已是最新";
+      tone = " ok";
+    }
+    updateUi.badge.className = `te-badge te-update-badge${tone}`;
+    updateUi.badge.textContent = badge;
+
+    const lines = [];
+    if (hasUpdate) lines.push(`发现新版本 v${latest.version}，当前 v${update.current}。`);
+    else if (update.checkedAt) lines.push(`已是最新版本（v${update.current}）。`);
+    else lines.push("还没有检查过更新。点「检查更新」可以立刻查一次。");
+    if (update.error) lines.push(`上次检查失败：${update.error}`);
+    else if (update.checkedAt) lines.push(`上次检查：${formatExpiry(update.checkedAt)}`);
+    updateUi.state.textContent = lines.join(" ");
+
+    const notes = hasUpdate ? String(latest?.notes || "").trim() : "";
+    if (notes) {
+      renderUpdateNotes(updateUi.notes, notes);
+      updateUi.notes.hidden = false;
+    } else {
+      updateUi.notes.textContent = "";
+      updateUi.notes.hidden = true;
+    }
+    // The upgrade steps only make sense next to a version to upgrade to.
+    updateUi.steps.hidden = !hasUpdate;
+    updateUi.open.hidden = !hasUpdate;
+    updateUi.reload.hidden = !hasUpdate;
+    updateUi.check.textContent = hasUpdate ? "重新检查" : "检查更新";
+    if (appUpdateConfig) renderAppUpdateConfig(appUpdateConfig, update);
+  }
+
+  async function loadAppUpdate() {
+    try {
+      renderAppUpdate(await api("/api/update"));
+    } catch {
+      // The daemon is unreachable; the card keeps its previous state and the
+      // footer already reports the outage.
+    }
+  }
+
+  async function checkAppUpdate({ silent = false } = {}) {
+    if (appUpdateBusy) return null;
+    appUpdateBusy = true;
+    updateUi.check.disabled = true;
+    settingsUi.appUpdateCheck.disabled = true;
+    try {
+      const data = await api("/api/update/check", {
+        method: "POST",
+        body: JSON.stringify({ force: true }),
+      });
+      renderAppUpdate(data);
+      if (!silent) {
+        if (data.hasUpdate) showToast(`发现新版本 v${data.latest.version}`);
+        else if (data.error) showToast(`检查更新失败：${data.error}`, true);
+        else showToast("已是最新版本");
+      }
+      return data;
+    } catch (error) {
+      if (!silent) showToast(error.message || String(error), true);
+      return null;
+    } finally {
+      appUpdateBusy = false;
+      updateUi.check.disabled = false;
+      settingsUi.appUpdateCheck.disabled = false;
+    }
+  }
+
+  async function openUpdatePage() {
+    updateUi.open.disabled = true;
+    try {
+      await api("/api/update/open", { method: "POST", body: "{}" });
+      showToast("已在浏览器打开下载页；装好新版后回到 TRAE 点「重载界面」");
+    } catch (error) {
+      showToast(error.message || String(error), true);
+    } finally {
+      updateUi.open.disabled = false;
+    }
+  }
+
+  /**
+   * Re-injects the panel from the running daemon.
+   *
+   * `POST /api/inject` hands the current script to the renderer, whose first
+   * lines remove this panel and its style, so this instance is gone the moment
+   * the daemon answers. The pause is only so the toast is visible before the
+   * panel disappears under the user's cursor.
+   */
+  async function reloadPanel() {
+    updateUi.reload.disabled = true;
+    showToast("正在重载界面…");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    try {
+      await api("/api/inject", { method: "POST", body: "{}" });
+    } catch (error) {
+      updateUi.reload.disabled = false;
+      showToast(error.message || String(error), true);
+    }
+  }
+
+  function handleUpdateAvailable() {
+    updateTabDot.hidden = false;
+    if (activeTab === "about") loadAppUpdate().catch(() => {});
+    else showToast("发现新版本，可在「关于」页查看");
+  }
+  window.addEventListener(UPDATE_AVAILABLE_EVENT, handleUpdateAvailable);
+
+  function renderAppUpdateConfig(appUpdate, update) {
+    if (!appUpdate) return;
+    appUpdateConfig = appUpdate;
+    settingsUi.appUpdateAuto.value = appUpdate.autoCheck ? "on" : "off";
+    settingsUi.appUpdateBadge.className =
+      `te-badge te-app-update-badge${appUpdate.autoCheck ? " ok" : ""}`;
+    settingsUi.appUpdateBadge.textContent = appUpdate.autoCheck ? "已开启" : "已关闭";
+
+    settingsUi.appUpdateStatus.textContent = "";
+    appendStatusLine(
+      settingsUi.appUpdateStatus,
+      "检查频率",
+      appUpdate.autoCheck ? "每天一次" : "自动检查已关闭，「立即检查」仍然可用",
+    );
+    if (update?.error) {
+      appendStatusLine(settingsUi.appUpdateStatus, "上次结果", `检查失败：${update.error}`);
+    } else if (update?.checkedAt) {
+      appendStatusLine(
+        settingsUi.appUpdateStatus,
+        "上次结果",
+        update.hasUpdate ? `发现新版本 v${update.latest.version}` : "已是最新版本",
+      );
+      appendStatusLine(settingsUi.appUpdateStatus, "上次检查", formatExpiry(update.checkedAt));
+    }
+  }
+
+  async function saveAppUpdateConfig() {
+    const autoCheck = settingsUi.appUpdateAuto.value === "on";
+    settingsUi.appUpdateSave.disabled = true;
+    try {
+      const data = await api("/api/settings/app-update", {
+        method: "POST",
+        body: JSON.stringify({ autoCheck }),
+      });
+      renderAppUpdateConfig(data.appUpdate, appUpdateSnapshot);
+      showToast(autoCheck ? "已保存：后台每天检查一次更新" : "已关闭自动检查");
+      // Turning it on is the user's own click, so this is the same deliberate
+      // request as「立即检查」— and it is the only way a result appears without
+      // waiting for the next daily sweep.
+      if (autoCheck && !appUpdateSnapshot?.checkedAt) {
+        await checkAppUpdate({ silent: true });
+      }
+    } catch (error) {
+      showToast(error.message || String(error), true);
+    } finally {
+      settingsUi.appUpdateSave.disabled = false;
+    }
+  }
+
   async function loadSettings({ silent = false } = {}) {
     try {
-      const data = await api("/api/settings");
+      const [data, update] = await Promise.all([
+        api("/api/settings"),
+        api("/api/update").catch(() => null),
+      ]);
       renderTraeUpdate(data.traeUpdate);
       renderCheckin(data.checkin);
+      // `/api/update` is the cached result, so the section reports the last check
+      // without the settings tab ever reaching the network.
+      renderAppUpdateConfig(data.appUpdate, update ?? appUpdateSnapshot);
       settingsLoaded = true;
     } catch (error) {
       settingsUi.traeBadge.className = "te-badge te-trae-badge warn";
@@ -2206,24 +2601,52 @@
     }
   }
 
+  /**
+   * Asks the daemon to exchange this account's credentials right now.
+   *
+   * The card's「有效期至」is the only thing the user is asked to read; the panel
+   * never mentions token kinds. When the server does not hand back a new expiry
+   * the stored date is unchanged, and the panel says exactly that rather than
+   * reporting a renewal it cannot prove.
+   */
+  async function renewAccount(button, accountId) {
+    const card = button.closest(".te-card");
+    const name = card?.querySelector(".te-name")?.textContent || "目标账号";
+    button.disabled = true;
+    showToast(`正在为「${name}」续签...`);
+    try {
+      const result = await api("/api/accounts/renew", {
+        method: "POST",
+        body: JSON.stringify({ accountId }),
+      });
+      if (result.renewed) {
+        showToast(`「${name}」已续签，有效期至 ${formatExpiry(result.accessExpiresAt)}`);
+      } else {
+        showToast("未取得新的到期时间，无法确认是否续期", true);
+      }
+      await refresh();
+    } catch (error) {
+      showToast(error.message || String(error), true);
+      await refresh();
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   function openDeleteDialog(account) {
     deleteAccountId = account.id;
     deleteAccountName = account.displayName || "该账号";
     const status = deleteMask.querySelector(".te-delete-status");
     status.textContent = `将删除「${deleteAccountName}」的本地备份。不会退出 TRAE 当前登录，也不能在助手内撤销。`;
-    const input = deleteMask.querySelector(".te-delete-confirm");
-    input.value = "";
-    deleteMask.querySelector(".te-delete-submit").disabled = true;
+    deleteMask.querySelector(".te-delete-submit").disabled = false;
+    deleteMask.querySelector(".te-delete-cancel").focus();
     deleteMask.classList.add("open");
-    input.focus();
   }
 
   function closeDeleteDialog() {
     deleteMask.classList.remove("open");
     deleteAccountId = null;
     deleteAccountName = "";
-    deleteMask.querySelector(".te-delete-confirm").value = "";
-    deleteMask.querySelector(".te-delete-submit").disabled = true;
   }
 
   async function confirmDeleteAccount() {
@@ -2709,6 +3132,9 @@
     // fallback for the moment the panel is opened. Kept because it is the one path
     // that works when the daemon has been running since before TRAE was signed in.
     void refreshAboutCheckinText();
+    // Paints whatever the daemon last found, so the About card is filled before
+    // the tab is ever opened.
+    void loadAppUpdate();
     // Paint "同步中" first: until the daemon answers, an account with no local
     // check-in record may well already be checked in on the server.
     syncingCheckin = true;
@@ -2791,6 +3217,21 @@
   settingsUi.checkinAuto.addEventListener("change", () => {
     applyCheckinVisibility(settingsUi.checkinAuto.value === "on");
   });
+  updateUi.check.addEventListener("click", () => {
+    checkAppUpdate().catch(() => {});
+  });
+  updateUi.open.addEventListener("click", () => {
+    openUpdatePage().catch(() => {});
+  });
+  updateUi.reload.addEventListener("click", () => {
+    reloadPanel().catch(() => {});
+  });
+  settingsUi.appUpdateSave.addEventListener("click", () => {
+    saveAppUpdateConfig().catch(() => {});
+  });
+  settingsUi.appUpdateCheck.addEventListener("click", () => {
+    checkAppUpdate().catch(() => {});
+  });
   for (const button of settingsUi.restartButtons) {
     button.addEventListener("click", () => {
       requestDaemonRestart().catch(() => {});
@@ -2803,12 +3244,14 @@
       if (account) openDeleteDialog(account);
       return;
     }
+    const renewButton = event.target.closest(".te-acc-renew");
+    if (renewButton?.dataset.accountId) {
+      renewAccount(renewButton, renewButton.dataset.accountId).catch(() => {});
+      return;
+    }
     const button = event.target.closest(".te-acc-switch");
     if (!button?.dataset.accountId) return;
     switchAccount(button, button.dataset.accountId).catch(() => {});
-  });
-  deleteMask.querySelector(".te-delete-confirm").addEventListener("input", (event) => {
-    deleteMask.querySelector(".te-delete-submit").disabled = event.target.value.trim() !== "删除";
   });
   deleteMask.querySelector(".te-delete-cancel").addEventListener("click", closeDeleteDialog);
   deleteMask.querySelector(".te-delete-submit").addEventListener("click", () => {
@@ -2897,6 +3340,7 @@
     clearTimeout(toastTimer);
     clearTimeout(accountsUpdatedTimer);
     window.removeEventListener(ACCOUNTS_UPDATED_EVENT, handleAccountsUpdated);
+    window.removeEventListener(UPDATE_AVAILABLE_EVENT, handleUpdateAvailable);
     stopOAuthPolling();
     stopFakeLogoutPolling();
     root.remove();

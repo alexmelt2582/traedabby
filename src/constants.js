@@ -3,8 +3,17 @@ import path from "node:path";
 import { APP_ROOT } from "./lib/app-paths.js";
 
 export const APP_NAME = "TRAE SOLO CN Enhancer";
-export const APP_VERSION = "1.1.1";
+export const APP_VERSION = "1.2.0";
 export const PROJECT_ROOT = APP_ROOT;
+
+/**
+ * Where this project publishes its releases.
+ *
+ * Written as a constant rather than read from `package.json` or `git remote`:
+ * the shipped build is a Node single-executable application with no repository
+ * next to it and no git metadata to consult at run time.
+ */
+export const GITHUB_REPO = "alexmelt2582/traedabby";
 
 export const DEFAULT_CDP_PORT = 9334;
 export const DEFAULT_UI_PORT = 47834;
