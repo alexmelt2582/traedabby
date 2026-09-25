@@ -159,8 +159,12 @@ TRAE 自身文件它唯一允许写入的是用户级 `User/settings.json`，
 - 安装器绝不从子进程管道读回路径。Node 写 UTF-8，而安装器用系统 ANSI 代码页
   解码管道，任何非 ASCII 路径都会损坏。检测在安装器内部通过注册表和文件检查完成，
   所选路径作为命令行参数*传给*可执行文件，这种方式对 Unicode 安全。
-- TRAE 的注册表检测必须严格匹配 `TRAE SOLO CN`。更宽松的 `TRAE` 匹配
-  会选中无关的 "Trae CN" IDE，并破坏所有重启 TRAE 的流程。
+- TRAE 的注册表检测以 `DisplayIcon` 的文件名是否为 `TRAE SOLO CN.exe` 为准，
+  产品名只是次级判据（`TRAE SOLO CN` 或 `TraeWork CN`）。真实安装写入的
+  DisplayName 是 `TraeWork CN (User)`，只认产品名会静默漏掉它、退回 C 盘候选
+  目录，使装在其它盘的 TRAE 检测不到；而放宽到裸 `TRAE` 会选中无关的
+  "Trae CN" IDE，破坏所有重启 TRAE 的流程。安装器与运行时必须用同一套判据，
+  注册表预筛选也不得把真实条目挡在匹配之前。
 - 卸载必须询问是否保留用户数据。`data\` 存放账号快照和 API token，删除它不可逆，
   绝不能隐式进行。
 

@@ -93,6 +93,9 @@ Type: filesandordirs; Name: "{app}\logs"
 const
   TraeExeName = 'TRAE SOLO CN.exe';
   ProductMarker = 'TRAE SOLO CN';
+  { TRAE SOLO CN 实际写入的 DisplayName 是 "TraeWork CN (User)"，不含
+    ProductMarker；只认产品名会漏掉真实安装，最终退回 C 盘候选目录。 }
+  ProductMarkerAlias = 'TRAEWORK CN';
 
 var
   TraePage: TInputFileWizardPage;
@@ -147,18 +150,31 @@ begin
   if MatchesProductExeName(Value) then Result := Value;
 end;
 
-{ 只接受 DisplayName 明确含 TRAE SOLO CN 的项；宽松匹配 "TRAE" 会命中
-  另一个产品 "Trae CN"（AI IDE），那会导致后续所有重启 TRAE 的流程失败。 }
+{ 产品名是次级判据：接受 TRAE SOLO CN 与真实写入的 TraeWork CN，但不接受裸
+  "TRAE"——那会命中另一个产品 "Trae CN"（AI IDE），导致后续所有重启 TRAE
+  的流程失败。TraeCode CN 两个名字都不含，同样被排除。 }
+function MatchesProductName(const DisplayName: String): Boolean;
+var
+  Value: String;
+begin
+  Value := Uppercase(DisplayName);
+  Result := (Pos(ProductMarker, Value) > 0) or (Pos(ProductMarkerAlias, Value) > 0);
+end;
+
+{ 主判据是 DisplayIcon 的文件名正好为 TRAE SOLO CN.exe：它与盘符和产品名都
+  无关，装在 D 盘也能命中。产品名匹配只在 DisplayIcon 不可用时用作退路。 }
 function ConsiderUninstallKey(const RootKey: Integer; const SubKey: String; var Found: String): Boolean;
 var
   DisplayName: String;
   DisplayIcon: String;
   InstallLocation: String;
   Candidate: String;
+  NameMatch: Boolean;
 begin
   Result := False;
-  if not RegQueryStringValue(RootKey, SubKey, 'DisplayName', DisplayName) then Exit;
-  if Pos(ProductMarker, Uppercase(DisplayName)) = 0 then Exit;
+
+  NameMatch := RegQueryStringValue(RootKey, SubKey, 'DisplayName', DisplayName);
+  if NameMatch then NameMatch := MatchesProductName(DisplayName);
 
   if RegQueryStringValue(RootKey, SubKey, 'DisplayIcon', DisplayIcon) then
   begin
@@ -170,6 +186,10 @@ begin
       Exit;
     end;
   end;
+
+  { InstallLocation 只是个目录，不能单独证明它是本产品，因此它只对名称匹配
+    的条目启用；文件存在性检查仍是最后一道闸。 }
+  if not NameMatch then Exit;
 
   if RegQueryStringValue(RootKey, SubKey, 'InstallLocation', InstallLocation) then
   begin

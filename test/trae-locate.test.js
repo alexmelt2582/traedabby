@@ -218,9 +218,60 @@ test("a registry entry for the unrelated Trae CN IDE is ignored", async () => {
 test("a registry entry that only matches on TRAE is not enough", () => {
   assert.equal(isProductDisplayName("TRAE SOLO CN"), true);
   assert.equal(isProductDisplayName("trae solo cn 1.2.3"), true);
+  assert.equal(isProductDisplayName("TraeWork CN (User)"), true);
   assert.equal(isProductDisplayName("Trae CN"), false);
+  assert.equal(isProductDisplayName("TraeCode CN (User)"), false);
   assert.equal(isProductDisplayName("TRAE"), false);
   assert.equal(isProductDisplayName(undefined), false);
+});
+
+test("the real TraeWork CN entry on a non-default drive is found", async () => {
+  const probe = fakeProbe({
+    files: [D_EXE],
+    uninstall: [
+      {
+        DisplayName: "TraeWork CN (User)",
+        InstallLocation: "D:\\Apps",
+        DisplayIcon: `"${D_EXE}",0`,
+      },
+    ],
+  });
+  const result = await detectTraeExe({ env: ENV, probe });
+  assert.equal(result.path, D_EXE);
+  assert.equal(result.source, "registry");
+});
+
+test("a TraeWork CN entry without a usable DisplayIcon falls back to InstallLocation", async () => {
+  const probe = fakeProbe({
+    files: [D_EXE],
+    uninstall: [{ DisplayName: "TraeWork CN (User)", InstallLocation: "D:\\Apps\\TRAE SOLO CN" }],
+  });
+  const result = await detectTraeExe({ env: ENV, probe });
+  assert.equal(result.path, D_EXE);
+  assert.equal(result.source, "registry");
+});
+
+test("a DisplayIcon naming the product exe identifies it without a product name", async () => {
+  const probe = fakeProbe({
+    files: [D_EXE],
+    uninstall: [{ DisplayName: "Some Rebranded Build", DisplayIcon: `"${D_EXE}",0` }],
+  });
+  const result = await detectTraeExe({ env: ENV, probe });
+  assert.equal(result.path, D_EXE);
+  assert.equal(result.source, "registry");
+});
+
+test("an unrelated entry is ignored even when it lists an install location", async () => {
+  const probe = fakeProbe({
+    files: [D_EXE],
+    uninstall: [{ DisplayName: "Some Other App", InstallLocation: "D:\\Apps" }],
+  });
+  const result = await detectTraeExe({ env: ENV, probe });
+  assert.equal(result.path, null);
+  assert.equal(
+    result.attempts.some((attempt) => attempt.source === "registry"),
+    false,
+  );
 });
 
 test("a registry DisplayIcon pointing at another executable is rejected", () => {
