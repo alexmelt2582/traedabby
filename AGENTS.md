@@ -134,6 +134,10 @@ TRAE 自身文件它唯一允许写入的是用户级 `User/settings.json`，
   打包出的二进制是控制台子系统程序，因此指向它的快捷方式总是会打开控制台窗口。
   只有启动入口被隐藏；`stop` 之类的命令保留其控制台，让用户看到结果。
   `test/packaging-assets.test.js` 会针对安装器脚本强制这一点。
+- `scripts/launch-hidden.vbs` 是构建产物，不是仓库里的源文件：`scripts/build-exe.js`
+  在组装便携版时把它写进 `dist/portable/scripts/`，安装器再从那里打包。这里写的
+  `scripts/launch-hidden.vbs` 一律指安装后的目录结构；在仓库里找不到它是正常的，
+  不要为了「补上缺失文件」而手写一份。
 - `scripts/win/trae-enhancer.iss` 必须打包 `scripts/launch-hidden.vbs`；指向一个
   安装器从未复制过的文件的启动快捷方式注定失效。
 - `src/lib/app-paths.js` 是唯一允许读取 `import.meta` 的模块。Node 22

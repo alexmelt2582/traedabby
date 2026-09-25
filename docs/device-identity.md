@@ -176,4 +176,4 @@ flowchart TD
 - `trae-refresh.js`：刷新优先从快照顶层 `deviceIdentity` + 设备密钥（`resolveDeviceKeyPair`）重建 deviceInfo 与签名，与登录指纹一致。
 - `trae-checkin.js`：**不改**（签到 `x-device-id` 仍用 userId）。
 - 测试：`npm test` 281 项全绿；`npm run check` 通过；`build:exe` 自校验通过。
-- **当前状态**：本模块已并入 `main`，并随 **v1.1.0** 发布。后续若有改动，按 `docs/RELEASE_FLOW.md` 走发布。
+- **当前状态**：本模块已并入 `main`，并随 **v1.1.1** 发布（v1.1.1 的发布说明写明功能代码与 v1.1.0 相同）。后续若有改动，按 `docs/RELEASE_FLOW.md` 走发布。
