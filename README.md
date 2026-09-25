@@ -2,10 +2,9 @@
 
 一个面向 Windows 的本地多账号增强助手，用于管理 `TRAE SOLO CN` 账号、切换登录、自动签到、导入导出和登录信息维护。
 
-当前发布分支：`release/v1.0.1`。
-当前开发版本：`1.0.1`。
+项目只有 `main` 一条长期分支，版本信息见 `package.json` 与 [发布记录](docs/releases)。
 
-> 本发布分支不包含代理功能。代理实现保存在独立的 `feature/proxy-support` 分支，发布包只使用直连网络。
+> 本版本不包含代理功能，发布包只使用直连网络。
 
 ## 功能
 
@@ -145,7 +144,7 @@ node scripts\service.js net
 node scripts\service.js logs
 ```
 
-本发布分支没有代理设置。如果所在网络必须通过代理访问 TRAE，代理实现请使用 `feature/proxy-support` 分支。
+本版本没有代理设置，只走直连网络。如果所在网络必须通过代理访问 TRAE，当前版本无法使用。
 
 ## 开发
 
@@ -165,13 +164,26 @@ npm start
 
 ## 发布
 
+发布全程在本地完成，不使用 GitHub Actions。流程细节见 `docs/RELEASE_FLOW.md`。
+
 发布前至少完成：
 
 ```powershell
 npm test
 npm run check
-npm run build:exe
-npm run build:installer
 ```
 
-然后生成安装包、便携 ZIP 和 SHA256 校验文件。后续 git 提交信息和发布更新说明统一使用中文。
+版本号需要同时修改 `package.json` 与 `src/constants.js`，并把发布说明写入 `docs/releases/vX.Y.Z.md`。
+发布说明要在打标签之前提交，使标签指向的提交自带该版本说明。
+
+打包并汇总产物到 `dist/release/`：
+
+```powershell
+npm run release:pack
+```
+
+随后合并分支到 `main`、推送 `main`、打标签 `vX.Y.Z`、推送标签，最后创建 Release 并上传产物：
+
+```powershell
+npm run release:publish
+```
