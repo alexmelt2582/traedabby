@@ -1,6 +1,6 @@
 {
   "name": "trae-solo-cn-enhancer",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "description": "TRAE SOLO CN desktop enhancement assistant",
   "type": "module",
@@ -12,6 +12,8 @@
     "doctor": "node scripts/doctor.js",
     "build:exe": "node scripts/build-exe.js",
     "build:installer": "node scripts/win/build-installer.js",
+    "release:pack": "node scripts/release-pack.js",
+    "release:publish": "node scripts/release-publish.js",
     "git:status": "git --git-dir=.git-meta --work-tree=. status --short",
     "test": "node --test",
     "check": "node scripts/check-syntax.js"

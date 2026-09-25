@@ -111,6 +111,20 @@ test("the installer launches through the hidden entry point, not the executable"
   }
 });
 
+test("the portable release archive lists its payload instead of the whole folder", async () => {
+  const text = (await read("scripts/release-pack.js")).toString("utf8");
+
+  // Archiving `.` from dist/portable sweeps in `data/` and `logs/` whenever the
+  // portable build has been run in place — `data/` holds account snapshots and
+  // `api-token`, so that would upload credentials to a public GitHub Release.
+  // That is exactly what happened once; this keeps the explicit list from being
+  // "simplified" back into a whole-folder archive.
+  assert.match(text, /"-C",\s*PORTABLE_DIR,\s*\.\.\.PORTABLE_PAYLOAD/);
+  assert.equal(/"-C",\s*PORTABLE_DIR,\s*"\."/.test(text), false);
+  assert.match(text, /if \(!PORTABLE_PAYLOAD\.includes\(name\)\)/);
+  assert.match(text, /\^\(data\|logs\)/);
+});
+
 test("the third-party Simplified Chinese translation is not rewritten", async () => {
   const bytes = await read("scripts/win/ChineseSimplified.isl");
   assert.equal(
