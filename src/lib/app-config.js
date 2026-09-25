@@ -119,12 +119,32 @@ export function normalizeCheckin(raw) {
   };
 }
 
+/**
+ * Whether this helper checks GitHub for a newer release of itself.
+ *
+ * A separate namespace from `traeUpdate`, which controls TRAE's own updater —
+ * the two are different programs and switching one off must never affect the
+ * other. Like `checkin`, a bad value falls back instead of refusing to start:
+ * the only source of an odd value is hand-editing, and the effective value is
+ * echoed back to the panel on every read.
+ */
+export const APP_UPDATE_DEFAULTS = { autoCheck: true };
+
+export function normalizeAppUpdate(raw) {
+  if (raw === null || raw === undefined) return { ...APP_UPDATE_DEFAULTS };
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("config.appUpdate must be a JSON object");
+  }
+  return { autoCheck: normalizeCheckinFlag(raw.autoCheck, APP_UPDATE_DEFAULTS.autoCheck) };
+}
+
 export function normalizeConfig(raw) {
   if (raw === null || raw === undefined) {
     return {
       traeExe: null,
       traeUpdate: { suppress: true, previousMode: null },
       checkin: { ...CHECKIN_DEFAULTS },
+      appUpdate: { ...APP_UPDATE_DEFAULTS },
     };
   }
   if (typeof raw !== "object" || Array.isArray(raw)) {
@@ -134,6 +154,7 @@ export function normalizeConfig(raw) {
     traeExe: normalizeTraeExe(raw.traeExe),
     traeUpdate: normalizeTraeUpdate(raw.traeUpdate),
     checkin: normalizeCheckin(raw.checkin),
+    appUpdate: normalizeAppUpdate(raw.appUpdate),
   };
 }
 

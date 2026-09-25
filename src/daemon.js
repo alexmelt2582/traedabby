@@ -14,6 +14,7 @@ import {
   DEFAULT_STORAGE_PATH,
   DEFAULT_TRAE_EXE,
   DEFAULT_UI_PORT,
+  GITHUB_REPO,
   LOOPBACK_HOST,
   parsePort,
 } from "./constants.js";
@@ -22,10 +23,16 @@ import {
   CHECKIN_INTERVALS,
   configPath,
   loadAppConfig,
+  normalizeAppUpdate,
   normalizeCheckin,
   normalizeTraeUpdate,
   saveAppConfig,
 } from "./lib/app-config.js";
+import {
+  DEFAULT_UPDATE_CHECK_INTERVAL_MS,
+  fetchLatestRelease,
+  isNewerVersion,
+} from "./lib/app-update.js";
 import { UI_INJECT_PATH } from "./lib/app-paths.js";
 import { createDaemonLogger } from "./lib/daemon-log.js";
 import { detectSeaApi, loadInjectSource, renderInjectScript } from "./lib/inject-source.js";
@@ -74,7 +81,7 @@ import {
   traeExecutableExists,
   waitForCdp,
 } from "./lib/trae-process.js";
-import { TraeOAuthManager } from "./lib/trae-oauth.js";
+import { TraeOAuthManager, openExternal } from "./lib/trae-oauth.js";
 import {
   applyAuthSnapshot,
   purgeLegacyTransactionDirectory,
@@ -132,6 +139,12 @@ let daemonRestartRequested = false;
  * timers' local state.
  */
 let rescheduleAutoCheckin = null;
+
+/**
+ * Same idea for the update check: `POST /api/settings/app-update` has to reach
+ * the running schedule instead of waiting for the next daemon start.
+ */
+let rescheduleAppUpdate = null;
 
 /**
  * Set at start-up when this run actually changed TRAE's settings file, so the
@@ -194,6 +207,12 @@ function requireApiToken(request, apiToken) {
 const ACCOUNTS_UPDATED_EVENT = "trae-enhancer:accounts-updated";
 
 /**
+ * Tells the injected panel that a newer release was found, so an already-open
+ * About tab can show its dot without waiting to be reopened.
+ */
+const UPDATE_AVAILABLE_EVENT = "trae-enhancer:update-available";
+
+/**
  * Tells the injected panel that account state changed on disk.
  *
  * The panel is a pure view — it never derives check-in state itself — so this is
@@ -205,20 +224,32 @@ const ACCOUNTS_UPDATED_EVENT = "trae-enhancer:accounts-updated";
  * it is opened, which is the fallback path on a machine where injection failed.
  */
 async function notifyAccountsUpdated(cdpClient) {
+  return notifyPanel(cdpClient, ACCOUNTS_UPDATED_EVENT);
+}
+
+/**
+ * Delivers one event to the injected panel, optionally with a detail payload.
+ *
+ * Never throws, and a disconnected CDP is not an error worth failing a caller
+ * over: the panel also reads the daemon's state whenever it is opened, which is
+ * the fallback path on a machine where injection failed.
+ */
+async function notifyPanel(cdpClient, event, detail) {
   if (!cdpClient?.isConnected) {
     // Worth a line in the log: on another machine this is the evidence that the
     // open panel will stay stale until it is reopened.
-    console.warn("[push] CDP is not connected; the panel was not notified");
+    console.warn(`[push] CDP is not connected; "${event}" was not delivered`);
     return false;
   }
+  const payload = detail === undefined ? "{}" : JSON.stringify(detail);
   try {
     await cdpClient.evaluate(
-      `window.dispatchEvent(new CustomEvent(${JSON.stringify(ACCOUNTS_UPDATED_EVENT)}))`,
+      `window.dispatchEvent(new CustomEvent(${JSON.stringify(event)}, { detail: ${payload} }))`,
       { awaitPromise: false, timeoutMs: 3000 },
     );
     return true;
   } catch (error) {
-    console.warn(`[push] failed to notify the panel: ${error?.message || error}`);
+    console.warn(`[push] failed to deliver "${event}": ${error?.message || error}`);
     return false;
   }
 }
@@ -280,6 +311,77 @@ async function syncTraeUpdateSetting({ suppress, previousMode = null } = {}) {
       : null);
   const result = await applyTraeUpdateSetting({ suppress, previousMode: remembered });
   return { result, state: await readTraeUpdateState(), remembered };
+}
+
+/* -------------------------------------------------------------------------- *
+ * This helper's own updates
+ *
+ * The panel cannot do this itself: TRAE's workbench enforces a CSP that blocks
+ * HTTP from the injected page, so the check runs here. The result is cached for
+ * the panel to read and pushed when a new release appears.
+ * -------------------------------------------------------------------------- */
+
+/**
+ * Last completed check.
+ *
+ * `checkedAt` is stamped on failures too. A transient network error then cannot
+ * turn the 24-hour schedule into a retry loop against GitHub, and the panel's
+ * own「检查更新」button is what forces a fresh attempt.
+ */
+let appUpdateState = { checkedAt: null, latest: null, error: null };
+let appUpdateCheckInFlight = null;
+
+function appUpdatePayload() {
+  const latest = appUpdateState.latest;
+  return {
+    current: APP_VERSION,
+    repo: GITHUB_REPO,
+    checkedAt: appUpdateState.checkedAt,
+    latest,
+    error: appUpdateState.error,
+    hasUpdate: !!latest && isNewerVersion(latest.version, APP_VERSION),
+  };
+}
+
+function isAppUpdateCheckFresh({ now = Date.now() } = {}) {
+  const checkedAt = Date.parse(appUpdateState.checkedAt || "");
+  return Number.isFinite(checkedAt) && now - checkedAt < DEFAULT_UPDATE_CHECK_INTERVAL_MS;
+}
+
+/**
+ * Performs one update check, or reuses a recent result.
+ *
+ * Concurrent callers share a single request: the panel and the timer can ask at
+ * the same moment, and two checks would only race to write the same state.
+ */
+async function checkForAppUpdate({ force = false } = {}) {
+  if (!force && isAppUpdateCheckFresh()) return { ...appUpdatePayload(), cached: true };
+  if (appUpdateCheckInFlight) return appUpdateCheckInFlight;
+
+  appUpdateCheckInFlight = (async () => {
+    try {
+      const latest = await fetchLatestRelease({ repo: GITHUB_REPO });
+      appUpdateState = { checkedAt: new Date().toISOString(), latest, error: null };
+      console.log(
+        `[update] latest=${latest.version} current=${APP_VERSION} hasUpdate=${isNewerVersion(latest.version, APP_VERSION)}`,
+      );
+      return { ...appUpdatePayload(), cached: false };
+    } catch (error) {
+      const message = error?.message || String(error);
+      // The previously found release is kept: a failed re-check is not evidence
+      // that the update went away, and dropping it would hide a known one.
+      appUpdateState = {
+        checkedAt: new Date().toISOString(),
+        latest: appUpdateState.latest,
+        error: message,
+      };
+      console.warn(`[update] check failed: ${message}`);
+      return { ...appUpdatePayload(), cached: false };
+    } finally {
+      appUpdateCheckInFlight = null;
+    }
+  })();
+  return appUpdateCheckInFlight;
 }
 
 /**
@@ -497,6 +599,22 @@ async function resolveCockpitPolicy() {
   return { action: "run", probe };
 }
 
+/**
+ * Reads which saved account TRAE is signed in as right now.
+ *
+ * The three outcomes are not interchangeable. `unknown` means the identity could
+ * not be read at all, and any path that rotates credentials has to treat it as
+ * unsafe rather than as "nobody is signed in".
+ */
+async function resolveActiveAccountState() {
+  try {
+    const storageRoot = await readJsonFile(STORAGE_PATH);
+    return await accountStore.resolveActiveAccount(storageRoot);
+  } catch {
+    return { id: null, state: "unknown" };
+  }
+}
+
 async function checkinOneAccount(
   account,
   { force = false, reason = "manual", allowTokenRefresh = true } = {},
@@ -662,6 +780,49 @@ async function keepaliveOneAccount(account, { reason = "scheduled" } = {}) {
     });
     return { id: account.id, ok: false, error: message, account: saved };
   }
+}
+
+/**
+ * Exchanges one account's credentials ahead of their expiry.
+ *
+ * This is the manual counterpart of the keep-alive sweep and the only path that
+ * rotates on request rather than on expiry. The exchange mints new tokens and
+ * retires the refresh token every other device holds, so it only ever runs from
+ * an explicit user action.
+ *
+ * The exchange reports a new expiry only when the server sends one. When it does
+ * not, the stored date is unchanged, and the caller must say so rather than claim
+ * a renewal: a date that did not move is not evidence that anything was extended.
+ */
+async function renewOneAccount(account) {
+  const snapshot = await accountStore.readSnapshot(account.id);
+  const before = readAuthFromSnapshot(snapshot) || {};
+  const refreshed = await refreshAuthSnapshot(snapshot);
+  const saved = await accountStore.saveSnapshot(account.id, refreshed.snapshot);
+  const auth = refreshed.auth || {};
+  const previousExpiresAt = before.expiredAt || null;
+  const accessExpiresAt = auth.expiredAt || null;
+  const renewed = !!accessExpiresAt && accessExpiresAt !== previousExpiresAt;
+  const savedKeepalive = await accountStore.saveKeepalive(account.id, {
+    status: "ok",
+    reason: "renew",
+    tokenRefreshed: true,
+    accessExpiresAt,
+    refreshExpiresAt: auth.refreshExpiredAt || null,
+    insightsUpdated: false,
+    warning: null,
+    error: null,
+    updatedAt: new Date().toISOString(),
+  });
+  return {
+    id: account.id,
+    ok: true,
+    renewed,
+    previousExpiresAt,
+    accessExpiresAt,
+    refreshExpiresAt: auth.refreshExpiredAt || null,
+    account: savedKeepalive || saved,
+  };
 }
 
 async function keepaliveActiveAccount(
@@ -1219,6 +1380,82 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
     return;
   }
 
+  /**
+   * Renews one account's credentials because the user asked for it.
+   *
+   * Deliberately not `keepalive/run`: that path follows the expiry policy and
+   * would skip an account whose credentials still have days left, which is
+   * exactly the account the user is looking at when they press this.
+   */
+  if (request.method === "POST" && pathname === "/api/accounts/renew") {
+    if (
+      switchInFlight ||
+      loginStartInFlight ||
+      oauthManager.isActive() ||
+      fakeLogoutManager.isActive() ||
+      insightsRefreshInFlight ||
+      checkinInFlight ||
+      keepaliveInFlight
+    ) {
+      jsonResponse(response, 409, { ok: false, error: "另一个账号操作正在进行，请稍后再试" });
+      return;
+    }
+    const body = await readRequestBody(request);
+    const accountId = String(body.accountId || "").trim();
+    const account = await accountStore.findAccount(accountId);
+    if (!account) {
+      jsonResponse(response, 404, { ok: false, error: "账号备份不存在" });
+      return;
+    }
+
+    // This path always rotates, so both guards the sweep follows apply with no
+    // exception: Cockpit Tools rotating the same refresh token would fight it,
+    // and a live identity that cannot be read might be one we would break.
+    const cockpit = await resolveCockpitPolicy();
+    if (cockpit.action !== "run") {
+      jsonResponse(response, 409, {
+        ok: false,
+        error:
+          cockpit.action === "skip"
+            ? "Cockpit Tools 正在运行，为避免凭据互相失效已跳过续签"
+            : "无法确认 Cockpit Tools 是否在运行，续签会轮换凭据，因此已跳过",
+        cockpit: {
+          running: cockpit.probe.running,
+          source: cockpit.probe.source,
+          error: cockpit.probe.error,
+        },
+      });
+      return;
+    }
+    const active = await resolveActiveAccountState();
+    if (active.state === "unknown") {
+      jsonResponse(response, 409, {
+        ok: false,
+        error: "无法确认 TRAE 当前登录的账号，续签可能让一个看不见的会话失效，因此已跳过",
+      });
+      return;
+    }
+    if (active.state === "matched" && active.id === accountId) {
+      jsonResponse(response, 409, {
+        ok: false,
+        error: "当前正在使用的账号由 TRAE 自己维护，不能在这里续签",
+      });
+      return;
+    }
+
+    try {
+      const result = await renewOneAccount(account);
+      await notifyAccountsUpdated(cdpClient);
+      console.log(`[renew] ${accountId} renewed=${result.renewed}`);
+      jsonResponse(response, 200, { ok: true, ...result });
+    } catch (error) {
+      const message = error.message || String(error);
+      console.error(`[renew] ${accountId} failed: ${message}`);
+      jsonResponse(response, 500, { ok: false, error: message });
+    }
+    return;
+  }
+
   if (request.method === "POST" && pathname === "/api/accounts/switch") {
     if (switchInFlight) {
       jsonResponse(response, 409, { ok: false, error: "An account switch is already running" });
@@ -1362,18 +1599,74 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
     return;
   }
 
+  /**
+   * The cached result of the last update check. Reads nothing from the network,
+   * so the About tab can call it on every open.
+   */
+  if (request.method === "GET" && pathname === "/api/update") {
+    jsonResponse(response, 200, { ok: true, ...appUpdatePayload() });
+    return;
+  }
+
+  if (request.method === "POST" && pathname === "/api/update/check") {
+    const body = await readRequestBody(request);
+    const result = await checkForAppUpdate({ force: body.force === true });
+    if (result.hasUpdate) {
+      await notifyPanel(cdpClient, UPDATE_AVAILABLE_EVENT, { version: result.latest.version });
+    }
+    jsonResponse(response, 200, { ok: true, ...result });
+    return;
+  }
+
+  if (request.method === "POST" && pathname === "/api/update/open") {
+    // The URL comes from this daemon's own cached check, never from the request
+    // body: this endpoint opens a browser, so it must not become a way to open
+    // an arbitrary address on the user's machine.
+    const url = appUpdateState.latest?.url;
+    if (!url) {
+      jsonResponse(response, 404, { ok: false, error: "还没有可用的下载地址，请先检查更新" });
+      return;
+    }
+    try {
+      const method = await openExternal(url);
+      jsonResponse(response, 200, { ok: true, method });
+    } catch (error) {
+      const message = error.message || String(error);
+      console.error(`[update] opening the release page failed: ${message}`);
+      jsonResponse(response, 500, { ok: false, error: message });
+    }
+    return;
+  }
+
   if (request.method === "GET" && pathname === "/api/settings") {
     const config = await loadAppConfig(DATA_DIR);
     const updateState = await readTraeUpdateState();
     jsonResponse(response, 200, {
       ok: true,
       checkin: checkinSettingsPayload(config.checkin),
+      appUpdate: { ...config.appUpdate },
       traeUpdate: {
         ...traeUpdatePayload(updateState, { suppress: config.traeUpdate.suppress }),
         startupNotice: traeUpdateStartupNotice,
         startupError: traeUpdateStartupError,
       },
     });
+    return;
+  }
+
+  if (request.method === "POST" && pathname === "/api/settings/app-update") {
+    const body = await readRequestBody(request);
+    const current = await loadAppConfig(DATA_DIR);
+    const appUpdate = normalizeAppUpdate({
+      ...current.appUpdate,
+      ...(body?.autoCheck === undefined ? {} : { autoCheck: body.autoCheck }),
+    });
+    await saveAppConfig(DATA_DIR, { appUpdate });
+    // Rebuilt here so the switch takes effect in the running process. No check
+    // is triggered as a side effect: saving a setting must not reach the network.
+    rescheduleAppUpdate?.({ initialRun: false });
+    console.log(`[settings] update checks autoCheck=${appUpdate.autoCheck}`);
+    jsonResponse(response, 200, { ok: true, appUpdate });
     return;
   }
 
@@ -1594,6 +1887,59 @@ async function main() {
     autoCheckinTimer.unref?.();
   }
 
+  /* ------------------------------------------------------------------------ *
+   * Update checks
+   *
+   * Same shape as the check-in schedule, and for the same reason: the switch in
+   * the settings tab has to take effect in the running process, so every trigger
+   * re-reads the configuration instead of closing over a start-up copy.
+   * ------------------------------------------------------------------------ */
+
+  let appUpdateTimer = null;
+  let appUpdateStartTimer = null;
+
+  async function runScheduledAppUpdateCheck(reason) {
+    const result = await checkForAppUpdate({ force: false });
+    if (result.hasUpdate) {
+      await notifyPanel(cdpClient, UPDATE_AVAILABLE_EVENT, { version: result.latest.version });
+    }
+    console.log(
+      `[update] ${reason} check: ${result.error ? `failed (${result.error})` : result.hasUpdate ? `found ${result.latest.version}` : "up to date"}`,
+    );
+  }
+
+  async function scheduleAppUpdateCheck({ initialRun = false } = {}) {
+    clearTimeout(appUpdateStartTimer);
+    clearInterval(appUpdateTimer);
+    appUpdateStartTimer = null;
+    appUpdateTimer = null;
+
+    let config;
+    try {
+      config = await loadAppConfig(DATA_DIR);
+    } catch (error) {
+      console.error(`[update] could not read the configuration: ${error.message || error}`);
+      return;
+    }
+    if (!config.appUpdate.autoCheck) {
+      console.log("[update] automatic update checks are disabled by configuration");
+      return;
+    }
+
+    if (initialRun) {
+      // Delayed so a daemon restart does not put a network call in front of the
+      // work the user is waiting for.
+      appUpdateStartTimer = setTimeout(() => void runScheduledAppUpdateCheck("startup"), 20000);
+      appUpdateStartTimer.unref?.();
+    }
+    appUpdateTimer = setInterval(
+      () => void runScheduledAppUpdateCheck("scheduled"),
+      DEFAULT_UPDATE_CHECK_INTERVAL_MS,
+    );
+    appUpdateTimer.unref?.();
+  }
+  rescheduleAppUpdate = scheduleAppUpdateCheck;
+
   /**
    * Adopts the account that is already signed in, the first time TRAE becomes
    * reachable.
@@ -1778,6 +2124,7 @@ async function main() {
   // schedule reads the configuration as it is at that moment.
   rescheduleAutoCheckin = scheduleAutoCheckin;
   await scheduleAutoCheckin({ initialRun: true });
+  await scheduleAppUpdateCheck({ initialRun: true });
 
   let autoKeepaliveTimer = null;
   let autoKeepaliveStartTimer = null;

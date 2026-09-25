@@ -83,6 +83,20 @@ test("the pane is registered in the content area", () => {
   );
 });
 
+test("every about selector matches a class in the about markup", () => {
+  const tokens = classTokens(paneTemplate("aboutPane"));
+  const selectors = queriedSelectors("aboutPane");
+  assert.ok(selectors.length >= 8, `expected several selectors, saw ${selectors.length}`);
+  for (const selector of selectors) {
+    const name = selector.replace(/^\./, "");
+    assert.equal(
+      tokens.has(name),
+      true,
+      `aboutPane.querySelector("${selector}") has no matching element`,
+    );
+  }
+});
+
 /**
  * Returns the body of a top-level function in the injected source.
  *
@@ -151,4 +165,106 @@ test("opening the panel adopts only a signed-in account that is not managed yet"
   assert.ok(body.includes("data?.accounts?.length === 0"));
   assert.ok(body.includes('data.currentAccountState === "not-managed"'));
   assert.ok(!body.includes("!data.currentAccountId"));
+});
+
+test("release notes are built as nodes, never parsed as HTML", () => {
+  const notes = functionBody("function renderUpdateNotes\\(container, markdown\\)");
+  assert.ok(notes.includes("textContent"), "the notes are not rendered as text");
+  assert.ok(
+    !notes.includes("innerHTML"),
+    "remote Markdown must never be assigned as HTML",
+  );
+  const inline = functionBody("function appendUpdateInline\\(node, text\\)");
+  assert.ok(inline.includes("createElement"));
+  assert.ok(!inline.includes("innerHTML"));
+  // Links stay text: an <a> inside the workbench page would navigate the IDE away.
+  assert.ok(!inline.includes("createElement(\"a\")"));
+});
+
+test("a failed update check is not reported as being up to date", () => {
+  const body = functionBody("function renderAppUpdate\\(update\\)");
+  assert.ok(body.includes("检查失败"), "a failed check has no wording of its own");
+  assert.ok(body.includes("update.error"), "the failure reason is never rendered");
+  // The dot must follow the payload, not the mere fact that a check happened.
+  assert.ok(body.includes("updateTabDot.hidden = !hasUpdate"));
+});
+
+test("the about card reads the daemon's cached result instead of GitHub", () => {
+  const body = functionBody("async function loadAppUpdate\\(\\)");
+  assert.ok(body.includes('"/api/update"'));
+  assert.ok(!body.includes("api.github.com"), "the panel must not call GitHub directly");
+  // A stale or unreachable daemon keeps the last card rather than clearing it.
+  assert.ok(body.includes("catch"));
+});
+
+test("checking for updates is a deliberate force, and silent when it is not asked for", () => {
+  const body = functionBody("async function checkAppUpdate\\(\\{ silent = false \\} = \\{\\}\\)");
+  assert.ok(body.includes('"/api/update/check"'));
+  assert.ok(body.includes("force: true"));
+  assert.ok(body.includes("if (!silent)"), "a background check must not toast");
+});
+
+test("reloading the panel re-injects it instead of restarting TRAE", () => {
+  const body = functionBody("async function reloadPanel\\(\\)");
+  assert.ok(body.includes('"/api/inject"'));
+  assert.ok(!body.includes("kill"), "no process may be terminated to reload the panel");
+});
+
+test("a pushed update notification lights the tab dot", () => {
+  assert.ok(source.includes('const UPDATE_AVAILABLE_EVENT = "trae-enhancer:update-available"'));
+  const body = functionBody("function handleUpdateAvailable\\(\\)");
+  assert.ok(body.includes("updateTabDot.hidden = false"));
+  assert.ok(
+    source.includes("window.addEventListener(UPDATE_AVAILABLE_EVENT, handleUpdateAvailable)"),
+    "the pushed event is never subscribed",
+  );
+  assert.ok(
+    source.includes("window.removeEventListener(UPDATE_AVAILABLE_EVENT, handleUpdateAvailable)"),
+    "the pushed event survives re-injection and would fire on a dead panel",
+  );
+});
+
+test("the update switch saves without reaching the network by itself", () => {
+  const body = functionBody("async function saveAppUpdateConfig\\(\\)");
+  assert.ok(body.includes('"/api/settings/app-update"'));
+  assert.ok(body.includes("autoCheck"));
+  // The one check it may trigger is the panel's own deliberate request.
+  assert.ok(body.includes('checkAppUpdate({ silent: true })'));
+});
+
+test("the delete dialog no longer asks for a typed confirmation", () => {
+  const markup = paneTemplate("deleteMask");
+  assert.ok(!markup.includes("te-delete-confirm"), "the typed confirmation field is still there");
+  assert.ok(markup.includes("te-delete-submit"));
+  const open = functionBody("function openDeleteDialog\\(account\\)");
+  assert.ok(
+    open.includes('.disabled = false'),
+    "the confirm button must be usable the moment the dialog opens",
+  );
+  assert.ok(
+    !functionBody("async function confirmDeleteAccount\\(\\)").includes("te-delete-confirm"),
+  );
+});
+
+test("the renew button rewrites the expiry instead of promising a success", () => {
+  const cards = functionBody(
+    "function renderAccounts\\(accounts, currentAccountId, currentAccountState\\)",
+  );
+  assert.ok(cards.includes("te-acc-renew"), "the renew button is not rendered");
+  const body = functionBody("async function renewAccount\\(button, accountId\\)");
+  assert.ok(body.includes('"/api/accounts/renew"'));
+  assert.ok(body.includes("if (result.renewed)"), "the success path is not gated on the result");
+  assert.ok(
+    body.includes("未取得新的到期时间"),
+    "an unchanged expiry must be reported as unconfirmed",
+  );
+  // The result carries the expiry but the user never sees a token kind: only the
+  // date that decides whether the account still works.
+  const messages = body.match(/showToast\([\s\S]*?\);/g) ?? [];
+  assert.ok(messages.length > 0, "the renew button says nothing at all");
+  for (const message of messages) {
+    // Interpolations name real fields (`accessExpiresAt`); only the visible text matters.
+    const visible = message.replace(/\$\{[^}]*\}/g, "").replace(/showToast|\$\{|\}/g, "");
+    assert.ok(!/access|refresh/i.test(visible), `token kind leaked: ${visible}`);
+  }
 });

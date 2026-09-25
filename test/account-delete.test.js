@@ -24,8 +24,12 @@ test("account deletion is wired through the daemon and protected by the active i
 test("the panel exposes delete only through an explicit confirmation flow", () => {
   const source = read("src/ui/inject.js");
   assert.match(source, /te-acc-delete/);
-  assert.match(source, /输入“删除”确认/);
-  assert.match(source, /value\.trim\(\) !== "删除"/);
   assert.match(source, /\/api\/accounts\/delete/);
   assert.match(source, /account\.id === currentAccountId/);
+  // One extra click in a dialog is the whole confirmation; asking the user to type
+  // the word back was friction without a decision behind it.
+  assert.match(source, /function openDeleteDialog\(account\)/);
+  assert.match(source, /deleteMask\.classList\.add\("open"\)/);
+  assert.doesNotMatch(source, /输入“删除”确认/);
+  assert.doesNotMatch(source, /te-delete-confirm/);
 });

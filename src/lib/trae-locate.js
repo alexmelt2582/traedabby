@@ -97,21 +97,31 @@ export function matchesProductExeName(candidate) {
 }
 
 /**
- * Registry entries are matched strictly on the product name. A looser match such
- * as `TRAE` also matches the unrelated "Trae CN" IDE, and picking that executable
- * would break every flow that restarts TRAE.
+ * The strongest registry signal is the file name in `DisplayIcon`: it is the one
+ * value that survives a non-default install drive and does not depend on how the
+ * product brands itself. TRAE SOLO CN registers as `TraeWork CN (User)`, a display
+ * name that contains neither `TRAE SOLO CN` nor any shorter string a substring
+ * rule could safely key on, so a display-name-only rule skips the real install
+ * entirely and quietly falls back to the well-known directories.
+ *
+ * The unrelated "Trae CN" IDE stays excluded: its DisplayIcon is `Trae CN.exe`,
+ * and neither of the accepted display names matches it.
  */
 export function isProductDisplayName(displayName) {
-  return typeof displayName === "string" && /TRAE SOLO CN/i.test(displayName);
+  return (
+    typeof displayName === "string" &&
+    (/TRAE SOLO CN/i.test(displayName) || /TRAEWORK CN/i.test(displayName))
+  );
 }
 
 function registryCandidates(entries) {
   const candidates = [];
   for (const entry of asArray(entries)) {
     if (!entry || typeof entry !== "object") continue;
-    if (!isProductDisplayName(entry.DisplayName)) continue;
     const fromIcon = displayIconToExePath(entry.DisplayIcon);
-    if (fromIcon && matchesProductExeName(fromIcon)) candidates.push(fromIcon);
+    const iconMatches = Boolean(fromIcon) && matchesProductExeName(fromIcon);
+    if (!iconMatches && !isProductDisplayName(entry.DisplayName)) continue;
+    if (iconMatches) candidates.push(fromIcon);
     if (typeof entry.InstallLocation === "string" && entry.InstallLocation.trim()) {
       candidates.push(path.join(entry.InstallLocation.trim(), TRAE_EXE_NAME));
     }
@@ -207,7 +217,11 @@ async function windowsSnapshot() {
     "  'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',",
     "  'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'",
     ")",
-    "$uninstall = @(Get-ItemProperty $keys | Where-Object { $_.DisplayName -match 'TRAE SOLO CN' } | Select-Object DisplayName, InstallLocation, DisplayIcon)",
+    // The filter has to admit the real install, whose DisplayName is
+    // "TraeWork CN (User)": a display-name-only rule drops it before the
+    // JavaScript matcher ever sees the entry. The DisplayIcon pattern is what
+    // actually identifies the product, and it is drive independent.
+    "$uninstall = @(Get-ItemProperty $keys | Where-Object { ($_.DisplayName -match 'TRAE SOLO CN|TraeWork CN') -or ($_.DisplayIcon -match 'TRAE SOLO CN\\.exe') } | Select-Object DisplayName, InstallLocation, DisplayIcon)",
     "[ordered]@{ processPaths = $proc; uninstall = $uninstall } | ConvertTo-Json -Depth 4 -Compress",
   ].join("\n");
   const { stdout } = await execFileAsync(

@@ -134,6 +134,10 @@ TRAE 自身文件它唯一允许写入的是用户级 `User/settings.json`，
   打包出的二进制是控制台子系统程序，因此指向它的快捷方式总是会打开控制台窗口。
   只有启动入口被隐藏；`stop` 之类的命令保留其控制台，让用户看到结果。
   `test/packaging-assets.test.js` 会针对安装器脚本强制这一点。
+- `scripts/launch-hidden.vbs` 是构建产物，不是仓库里的源文件：`scripts/build-exe.js`
+  在组装便携版时把它写进 `dist/portable/scripts/`，安装器再从那里打包。这里写的
+  `scripts/launch-hidden.vbs` 一律指安装后的目录结构；在仓库里找不到它是正常的，
+  不要为了「补上缺失文件」而手写一份。
 - `scripts/win/trae-enhancer.iss` 必须打包 `scripts/launch-hidden.vbs`；指向一个
   安装器从未复制过的文件的启动快捷方式注定失效。
 - `src/lib/app-paths.js` 是唯一允许读取 `import.meta` 的模块。Node 22
@@ -155,8 +159,12 @@ TRAE 自身文件它唯一允许写入的是用户级 `User/settings.json`，
 - 安装器绝不从子进程管道读回路径。Node 写 UTF-8，而安装器用系统 ANSI 代码页
   解码管道，任何非 ASCII 路径都会损坏。检测在安装器内部通过注册表和文件检查完成，
   所选路径作为命令行参数*传给*可执行文件，这种方式对 Unicode 安全。
-- TRAE 的注册表检测必须严格匹配 `TRAE SOLO CN`。更宽松的 `TRAE` 匹配
-  会选中无关的 "Trae CN" IDE，并破坏所有重启 TRAE 的流程。
+- TRAE 的注册表检测以 `DisplayIcon` 的文件名是否为 `TRAE SOLO CN.exe` 为准，
+  产品名只是次级判据（`TRAE SOLO CN` 或 `TraeWork CN`）。真实安装写入的
+  DisplayName 是 `TraeWork CN (User)`，只认产品名会静默漏掉它、退回 C 盘候选
+  目录，使装在其它盘的 TRAE 检测不到；而放宽到裸 `TRAE` 会选中无关的
+  "Trae CN" IDE，破坏所有重启 TRAE 的流程。安装器与运行时必须用同一套判据，
+  注册表预筛选也不得把真实条目挡在匹配之前。
 - 卸载必须询问是否保留用户数据。`data\` 存放账号快照和 API token，删除它不可逆，
   绝不能隐式进行。
 

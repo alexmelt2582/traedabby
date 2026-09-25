@@ -10,6 +10,10 @@
   // panel is a pure view, so this is how a background sweep reaches an already
   // open panel without a polling loop on this side.
   const ACCOUNTS_UPDATED_EVENT = "trae-enhancer:accounts-updated";
+  // Dispatched by the daemon when its scheduled check finds a newer release, so
+  // the About tab can show the dot without the panel ever polling GitHub (the
+  // workbench CSP would block that request anyway).
+  const UPDATE_AVAILABLE_EVENT = "trae-enhancer:update-available";
 
   window.__traeEnhancerCleanup?.();
   document.getElementById(ROOT_ID)?.remove();
@@ -71,7 +75,9 @@
       position: absolute;
       right: 0;
       bottom: 50px;
-      width: min(460px, calc(100vw - 24px));
+      /* Wide enough that a settings row reads as label + control on one line and
+         the account meta row stops wrapping. */
+      width: min(540px, calc(100vw - 24px));
       height: min(700px, calc(100vh - 84px));
       display: none;
       flex-direction: column;
@@ -171,6 +177,20 @@
       background: var(--te-accent);
     }
 
+    /* A release found by a background check has to be visible from the account
+       tab, so the dot lives on the tab rather than inside the About pane. */
+    #${ROOT_ID} .te-tab { position: relative; }
+    #${ROOT_ID} .te-tab-dot {
+      position: absolute;
+      top: 5px;
+      right: 7px;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #ef4444;
+      box-shadow: 0 0 0 2px var(--te-panel-solid);
+    }
+
     #${ROOT_ID} .te-content {
       min-height: 0;
       overflow: hidden;
@@ -190,7 +210,7 @@
 
     #${ROOT_ID} .te-pane[data-pane="about"] {
       overflow: auto;
-      padding: 12px;
+      padding: 14px;
     }
 
     #${ROOT_ID} .te-pane[data-pane="settings"] {
@@ -203,10 +223,12 @@
       gap: 12px;
     }
 
+    /* The one card primitive: settings panels and about sections both use it, so a
+       new block never needs a border-and-radius of its own. */
     #${ROOT_ID} .te-section {
-      padding: 12px;
+      padding: 14px;
       border: 1px solid var(--te-border);
-      border-radius: 11px;
+      border-radius: 12px;
       background: var(--te-surface);
     }
 
@@ -215,70 +237,107 @@
       align-items: center;
       gap: 8px;
       font-size: 12px;
-      font-weight: 650;
+      font-weight: 700;
+      letter-spacing: -.005em;
     }
 
     #${ROOT_ID} .te-section-hint {
-      margin-top: 6px;
+      margin-top: 7px;
       color: var(--te-muted);
-      font-size: 11px;
+      font-size: 10.5px;
+      line-height: 1.6;
     }
 
+    /* A settings row puts the control at its right end, so the select is sized to
+       its content instead of stretching the full width of a stacked field. */
     #${ROOT_ID} .te-select {
-      width: 100%;
-      height: 34px;
-      margin-top: 10px;
-      padding: 0 8px;
+      height: 30px;
+      padding: 0 6px 0 8px;
       border: 1px solid var(--te-border);
       border-radius: 8px;
       outline: 0;
       color: var(--te-text);
       background: var(--te-panel-solid);
       font: inherit;
+      font-size: 11px;
+      cursor: pointer;
     }
 
-    #${ROOT_ID} .te-select:focus {
+    #${ROOT_ID} .te-select:hover:not(:disabled) {
+      border-color: color-mix(in srgb, var(--te-accent) 45%, var(--te-border));
+    }
+
+    #${ROOT_ID} .te-select:focus-visible {
       border-color: var(--te-accent);
       box-shadow: 0 0 0 1px var(--te-accent);
     }
 
-    #${ROOT_ID} .te-status-list {
-      display: grid;
-      gap: 4px;
-      margin-top: 10px;
-      padding-top: 10px;
-      border-top: 1px dashed var(--te-border);
-      color: var(--te-muted);
-      font-size: 11px;
+    /* The fields a master switch governs stay readable but must look inert. */
+    #${ROOT_ID} .te-select:disabled {
+      opacity: .5;
+      cursor: not-allowed;
     }
 
+    #${ROOT_ID} .te-status-list {
+      display: grid;
+      gap: 5px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid color-mix(in srgb, var(--te-border) 62%, transparent);
+      color: var(--te-muted);
+      font-size: 10.5px;
+      line-height: 1.5;
+    }
+
+    /* An empty list must not leave its separator hanging under the controls. */
+    #${ROOT_ID} .te-status-list:empty { display: none; }
+
+    /* Label column: the values line up down the card instead of stepping right
+       with every label length. */
     #${ROOT_ID} .te-status-line {
-      display: flex;
-      gap: 6px;
+      display: grid;
+      grid-template-columns: 68px minmax(0, 1fr);
+      gap: 8px;
     }
 
     #${ROOT_ID} .te-status-line > b {
-      flex: 0 0 auto;
-      color: var(--te-text);
-      font-weight: 650;
+      color: var(--te-muted);
+      font-weight: 600;
     }
 
     #${ROOT_ID} .te-status-line > span {
       min-width: 0;
+      color: var(--te-text);
       word-break: break-word;
     }
 
+    /* One pill shape everywhere, so a state change never resizes the row. */
     #${ROOT_ID} .te-badge {
-      padding: 1px 7px;
+      height: 20px;
+      display: inline-flex;
+      align-items: center;
+      flex: 0 0 auto;
+      padding: 0 8px;
       border: 1px solid var(--te-border);
       border-radius: 999px;
       color: var(--te-muted);
+      background: color-mix(in srgb, var(--te-muted) 10%, transparent);
       font-size: 10px;
       font-weight: 650;
+      white-space: nowrap;
     }
 
-    #${ROOT_ID} .te-badge.ok { color: #16a34a; border-color: #16a34a66; }
-    #${ROOT_ID} .te-badge.warn { color: #d97706; border-color: #d9770666; }
+    #${ROOT_ID} .te-badge.ok {
+      color: #16a34a;
+      border-color: color-mix(in srgb, #16a34a 34%, transparent);
+      background: color-mix(in srgb, #16a34a 12%, transparent);
+    }
+
+    #${ROOT_ID} .te-badge.warn {
+      color: #d97706;
+      border-color: color-mix(in srgb, #d97706 34%, transparent);
+      background: color-mix(in srgb, #d97706 12%, transparent);
+    }
 
     #${ROOT_ID} .te-section-actions {
       display: flex;
@@ -302,76 +361,83 @@
     #${ROOT_ID} .te-restart-banner.show { display: flex; }
     #${ROOT_ID} .te-restart-banner button { margin-left: auto; flex: 0 0 auto; }
 
-    /* The section cards already use the surface colour, so the controls inside
-       them need the solid panel colour to stay distinguishable. */
+    /* A card already uses the surface colour, so a secondary button inside one
+       needs the solid panel colour to stay readable. */
     #${ROOT_ID} .te-pane[data-pane="settings"] .te-secondary,
-    #${ROOT_ID} .te-pane[data-pane="settings"] .te-field input {
+    #${ROOT_ID} .te-pane[data-pane="about"] .te-secondary {
       background: var(--te-panel-solid);
     }
 
     #${ROOT_ID} .te-about {
       display: grid;
-      gap: 14px;
+      gap: 12px;
+      align-content: start;
     }
 
+    /* Identity block. The version is stated here and nowhere else, so the update
+       card below can report status without repeating the number. */
     #${ROOT_ID} .te-about-hero {
       display: grid;
-      grid-template-columns: 44px minmax(0, 1fr);
-      gap: 12px;
+      grid-template-columns: 46px minmax(0, 1fr);
+      gap: 13px;
       align-items: center;
       padding: 14px;
       border: 1px solid var(--te-border);
-      border-radius: 11px;
-      background: var(--te-surface);
+      border-radius: 12px;
+      background:
+        radial-gradient(130% 150% at 0% 0%, color-mix(in srgb, var(--te-accent) 15%, transparent) 0%, transparent 64%),
+        var(--te-surface);
     }
 
     #${ROOT_ID} .te-about-icon {
-      width: 44px;
-      height: 44px;
+      width: 46px;
+      height: 46px;
       display: grid;
       place-items: center;
-      border-radius: 11px;
+      border-radius: 13px;
       color: var(--te-accent-fg);
-      background: var(--te-accent);
+      background: linear-gradient(160deg, color-mix(in srgb, var(--te-accent) 78%, #ffffff) 0%, var(--te-accent) 100%);
+      box-shadow: 0 6px 16px color-mix(in srgb, var(--te-accent) 30%, transparent);
     }
 
     #${ROOT_ID} .te-about-name {
-      font-size: 15px;
-      font-weight: 750;
+      font-size: 14.5px;
+      font-weight: 700;
+      letter-spacing: -.01em;
     }
 
     #${ROOT_ID} .te-about-summary {
-      margin-top: 4px;
+      margin-top: 3px;
       color: var(--te-muted);
-      font-size: 11px;
+      font-size: 10.5px;
       line-height: 1.55;
     }
 
     #${ROOT_ID} .te-about-version {
       display: inline-flex;
       margin-top: 7px;
-      padding: 3px 7px;
+      padding: 2px 8px;
       border-radius: 999px;
       color: var(--te-accent);
       background: color-mix(in srgb, var(--te-accent) 12%, transparent);
       font-size: 10px;
       font-weight: 700;
+      font-variant-numeric: tabular-nums;
     }
 
-    #${ROOT_ID} .te-feature-list {
-      display: grid;
-      gap: 7px;
-    }
+    /* Steps: hairline rows inside one card, not a bordered card per row. */
+    #${ROOT_ID} .te-feature-list { display: grid; margin-top: 4px; }
 
     #${ROOT_ID} .te-feature {
       display: grid;
       grid-template-columns: 22px minmax(0, 1fr);
-      gap: 8px;
+      gap: 10px;
       align-items: start;
-      padding: 9px 10px;
-      border: 1px solid var(--te-border);
-      border-radius: 9px;
-      background: var(--te-surface);
+      padding: 10px 0;
+    }
+
+    #${ROOT_ID} .te-feature + .te-feature {
+      border-top: 1px solid color-mix(in srgb, var(--te-border) 62%, transparent);
     }
 
     #${ROOT_ID} .te-feature-icon {
@@ -379,23 +445,26 @@
       height: 22px;
       display: grid;
       place-items: center;
-      border-radius: 7px;
+      border-radius: 999px;
       color: var(--te-accent);
-      background: color-mix(in srgb, var(--te-accent) 10%, transparent);
+      background: color-mix(in srgb, var(--te-accent) 12%, transparent);
+      font-size: 10px;
+      font-weight: 750;
+      font-variant-numeric: tabular-nums;
     }
 
     #${ROOT_ID} .te-feature-title {
       display: block;
-      font-size: 12px;
+      font-size: 11.5px;
       font-weight: 650;
     }
 
     #${ROOT_ID} .te-feature-desc {
       display: block;
-      margin-top: 2px;
+      margin-top: 3px;
       color: var(--te-muted);
       font-size: 10.5px;
-      line-height: 1.45;
+      line-height: 1.55;
     }
 
     #${ROOT_ID} .te-toolbar {
@@ -913,77 +982,115 @@
       padding: 0;
     }
 
+    /* Settings: the categories are a segmented strip above the content.
+       The old 108px left rail ate a third of the panel and squeezed every
+       control into a column too narrow to read. */
     #${ROOT_ID} .te-settings-shell {
-      display: grid;
-      grid-template-columns: 108px minmax(0, 1fr);
+      display: flex;
+      flex-direction: column;
       height: 100%;
       min-height: 0;
     }
 
     #${ROOT_ID} .te-settings-nav {
-      display: grid;
-      align-content: start;
+      display: flex;
       gap: 4px;
-      padding: 12px 8px;
-      border-right: 1px solid var(--te-border);
-      background: color-mix(in srgb, var(--te-surface) 72%, transparent);
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--te-border);
+      background: color-mix(in srgb, var(--te-surface) 55%, transparent);
+      flex: 0 0 auto;
     }
 
     #${ROOT_ID} .te-settings-nav-item {
-      min-height: 34px;
-      padding: 0 9px;
+      height: 30px;
+      padding: 0 12px;
       border: 1px solid transparent;
       border-radius: 8px;
       color: var(--te-muted);
       background: transparent;
       font: inherit;
-      font-size: 11px;
+      font-size: 11.5px;
       font-weight: 650;
-      text-align: left;
       white-space: nowrap;
       cursor: pointer;
+    }
+
+    #${ROOT_ID} .te-settings-nav-item:hover {
+      color: var(--te-text);
+      background: var(--te-surface-hover);
     }
 
     #${ROOT_ID} .te-settings-nav-item.active {
       border-color: var(--te-border);
       color: var(--te-text);
       background: var(--te-panel-solid);
+      box-shadow: 0 1px 2px rgba(0,0,0,.1);
     }
 
     #${ROOT_ID} .te-settings-panels {
       min-width: 0;
+      min-height: 0;
       overflow: auto;
-      padding: 12px;
+      padding: 14px;
+      flex: 1 1 auto;
     }
 
     #${ROOT_ID} .te-settings-panel { display: none; }
-    #${ROOT_ID} .te-settings-panel.active { display: grid; gap: 12px; }
+    #${ROOT_ID} .te-settings-panel.active { display: grid; gap: 12px; align-content: start; }
 
-    #${ROOT_ID} .te-settings-panel-head {
+    /* Card head: one title level per card, so settings never render an <h2>
+       directly above another <h2> that means something different. */
+    #${ROOT_ID} .te-card-head {
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
-      gap: 10px;
+      gap: 12px;
     }
 
-    #${ROOT_ID} .te-settings-panel-head h2 {
+    #${ROOT_ID} .te-card-title {
       margin: 0;
-      font-size: 14px;
+      font-size: 12.5px;
       font-weight: 700;
+      letter-spacing: -.005em;
     }
 
-    #${ROOT_ID} .te-settings-panel-head p {
-      margin: 4px 0 0;
+    #${ROOT_ID} .te-card-sub {
+      margin: 3px 0 0;
       color: var(--te-muted);
       font-size: 10.5px;
+      line-height: 1.55;
+    }
+
+    /* One setting per row: name and explanation on the left, control on the
+       right. Hairlines replace the nested boxes the old stack used. */
+    #${ROOT_ID} .te-set-rows { display: grid; margin-top: 2px; }
+
+    #${ROOT_ID} .te-set-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 11px 0;
+      cursor: pointer;
+    }
+
+    #${ROOT_ID} .te-set-row + .te-set-row {
+      border-top: 1px solid color-mix(in srgb, var(--te-border) 62%, transparent);
+    }
+
+    #${ROOT_ID} .te-set-text { min-width: 0; display: grid; gap: 2px; }
+    #${ROOT_ID} .te-set-name { color: var(--te-text); font-size: 11.5px; font-weight: 600; }
+
+    #${ROOT_ID} .te-set-hint {
+      color: var(--te-muted);
+      font-size: 10px;
       line-height: 1.5;
     }
 
-    #${ROOT_ID} .te-settings-panel .te-section {
-      padding: 0;
-      border: 0;
-      border-radius: 0;
-      background: transparent;
+    #${ROOT_ID} .te-set-row .te-select {
+      min-width: 116px;
+      max-width: 172px;
+      flex: 0 0 auto;
     }
 
     #${ROOT_ID} .te-danger {
@@ -1000,56 +1107,108 @@
 
     #${ROOT_ID} .te-danger:disabled { opacity: .5; }
     #${ROOT_ID} .te-acc-delete:hover { color: #ef4444; }
+    #${ROOT_ID} .te-acc-renew:hover { color: var(--te-accent); }
 
-    /* About is now a short user guide, but keeps the original panel skin. */
-    #${ROOT_ID} .te-help { display: grid; gap: 16px; }
-    #${ROOT_ID} .te-help-intro { display: grid; gap: 6px; }
-    #${ROOT_ID} .te-help-kicker {
-      color: var(--te-accent);
-      font-size: 10px;
-      font-weight: 700;
-    }
-    #${ROOT_ID} .te-help h2, #${ROOT_ID} .te-help h3 { margin: 0; }
-    #${ROOT_ID} .te-help h2 { font-size: 20px; line-height: 1.2; }
-    #${ROOT_ID} .te-help-intro p,
-    #${ROOT_ID} .te-help-step p,
-    #${ROOT_ID} .te-help-note-wrap p,
-    #${ROOT_ID} .te-help-details p {
-      margin: 4px 0 0;
+    /* Update card. The version itself lives in the hero above, so this card only
+       reports status and what to do about it. */
+    #${ROOT_ID} .te-update-card { display: grid; gap: 12px; }
+    #${ROOT_ID} .te-update-state {
+      margin: 0;
       color: var(--te-muted);
-      font-size: 11px;
+      font-size: 10.5px;
       line-height: 1.6;
     }
-    #${ROOT_ID} .te-help-steps { display: grid; gap: 0; }
-    #${ROOT_ID} .te-help-step {
+    #${ROOT_ID} .te-update-notes {
       display: grid;
-      grid-template-columns: 24px minmax(0, 1fr);
-      gap: 9px;
-      padding: 11px 0;
-      border-top: 1px solid var(--te-border);
-    }
-    #${ROOT_ID} .te-help-step:last-child { border-bottom: 1px solid var(--te-border); }
-    #${ROOT_ID} .te-help-step-num { color: var(--te-accent); font-weight: 750; }
-    #${ROOT_ID} .te-help h3 { font-size: 12px; }
-    #${ROOT_ID} .te-help-note-wrap {
+      gap: 8px;
+      max-height: 208px;
+      overflow: auto;
       padding: 11px 12px;
-      border: 1px solid var(--te-border);
+      border: 1px solid color-mix(in srgb, var(--te-border) 70%, transparent);
       border-radius: 9px;
-      background: var(--te-surface);
+      background: var(--te-panel-solid);
     }
-    #${ROOT_ID} .te-help-note-wrap strong { font-size: 12px; }
-    #${ROOT_ID} .te-help-details summary { color: var(--te-text); font-size: 12px; font-weight: 650; cursor: pointer; }
-    #${ROOT_ID} .te-help-version { color: var(--te-muted); font-size: 10px; }
+    #${ROOT_ID} .te-update-notes h4 { margin: 4px 0 0; font-size: 11px; }
+    #${ROOT_ID} .te-update-notes h4:first-child { margin-top: 0; }
+    #${ROOT_ID} .te-update-notes p,
+    #${ROOT_ID} .te-update-notes li {
+      margin: 0;
+      color: var(--te-muted);
+      font-size: 10.5px;
+      line-height: 1.6;
+    }
+    #${ROOT_ID} .te-update-notes ul { margin: 0; padding-left: 17px; display: grid; gap: 4px; }
+    #${ROOT_ID} .te-update-notes code {
+      padding: 1px 4px;
+      border-radius: 4px;
+      background: var(--te-surface-hover);
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 10.5px;
+    }
+    #${ROOT_ID} .te-update-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    #${ROOT_ID} .te-update-steps {
+      margin: 0;
+      padding-left: 16px;
+      display: grid;
+      gap: 4px;
+      color: var(--te-muted);
+      font-size: 10.5px;
+      line-height: 1.6;
+    }
+
+    /* The one collapsible block on the About tab. */
+    #${ROOT_ID} .te-about-details {
+      padding: 12px 14px;
+      border: 1px solid var(--te-border);
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--te-surface) 60%, transparent);
+    }
+    #${ROOT_ID} .te-about-details summary {
+      color: var(--te-text);
+      font-size: 11.5px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    #${ROOT_ID} .te-about-details summary::marker { color: var(--te-accent); }
+    #${ROOT_ID} .te-about-details p {
+      margin: 8px 0 0;
+      color: var(--te-muted);
+      font-size: 10.5px;
+      line-height: 1.6;
+    }
+
+    /* Keyboard users need to see where they are: the panel floats over the IDE,
+       so the focus ring has to come from the panel itself. */
+    #${ROOT_ID} button:focus-visible,
+    #${ROOT_ID} summary:focus-visible {
+      outline: 2px solid var(--te-accent);
+      outline-offset: 1px;
+    }
+
+    /* One shared motion budget: hover and state changes only, never a bounce. */
+    #${ROOT_ID} button,
+    #${ROOT_ID} select,
+    #${ROOT_ID} summary,
+    #${ROOT_ID} .te-set-row {
+      transition: background-color .15s cubic-bezier(.16, 1, .3, 1),
+                  border-color .15s cubic-bezier(.16, 1, .3, 1),
+                  color .15s cubic-bezier(.16, 1, .3, 1);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #${ROOT_ID} *,
+      #${ROOT_ID} *::before,
+      #${ROOT_ID} *::after {
+        transition-duration: .01ms !important;
+        animation-duration: .01ms !important;
+      }
+    }
 
     @media (max-width: 420px) {
-      #${ROOT_ID} .te-settings-shell { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
-      #${ROOT_ID} .te-settings-nav {
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        border-right: 0;
-        border-bottom: 1px solid var(--te-border);
-        padding: 8px;
-      }
-      #${ROOT_ID} .te-settings-nav-item { padding: 0 4px; text-align: center; }
+      #${ROOT_ID} .te-settings-nav { padding: 8px; }
+      #${ROOT_ID} .te-settings-nav-item { padding: 0 9px; font-size: 11px; }
+      #${ROOT_ID} .te-set-row { gap: 10px; }
+      #${ROOT_ID} .te-set-row .te-select { min-width: 96px; max-width: 132px; }
     }
   `;
   document.head.appendChild(style);
@@ -1097,6 +1256,7 @@
         <path d="M12 16v-4M12 8h.01"/>
       </svg>
       <span>关于</span>
+      <span class="te-tab-dot" hidden></span>
     </button>
   `;
 
@@ -1158,47 +1318,88 @@
   aboutPane.className = "te-pane";
   aboutPane.dataset.pane = "about";
   aboutPane.innerHTML = `
-    <div class="te-help">
-      <header class="te-help-intro">
-        <span class="te-help-kicker">本地账号助手</span>
-        <h2>切换账号，不用反复扫码</h2>
-        <p>账号信息只保存在这台电脑。需要时切换，平时自动维护，不会把数据上传到别处。</p>
+    <div class="te-about">
+      <header class="te-about-hero">
+        <span class="te-about-icon">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4" y="7" width="16" height="12" rx="3"/>
+            <path d="M9 12h.01M15 12h.01M9 16h6M12 7V4M9 4h6"/>
+          </svg>
+        </span>
+        <div>
+          <div class="te-about-name">TRAE 增强助手</div>
+          <p class="te-about-summary">账号信息只保存在这台电脑。切换、备份、签到都在本地完成，不会上传到别处。</p>
+          <span class="te-about-version">v${APP_VERSION}</span>
+        </div>
       </header>
-      <div class="te-help-steps">
-        <article class="te-help-step">
-          <span class="te-help-step-num">1</span>
+      <section class="te-section te-update-card">
+        <div class="te-card-head">
           <div>
-            <h3>添加账号</h3>
-            <p>点「登录」，推荐选择「无感登录」。在浏览器完成授权后，账号会自动出现在列表里。</p>
+            <div class="te-card-title">助手更新</div>
+            <p class="te-card-sub">发现新版本时，这个页签会亮起小红点，更新内容显示在下面。</p>
           </div>
-        </article>
-        <article class="te-help-step">
-          <span class="te-help-step-num">2</span>
-          <div>
-            <h3>切换账号</h3>
-            <p>点账号卡片右侧的切换按钮。TRAE 会短时间重启，原来的账号会自动备份，失败也会恢复。</p>
-          </div>
-        </article>
-        <article class="te-help-step">
-          <span class="te-help-step-num">3</span>
-          <div>
-            <h3>换电脑</h3>
-            <p>用导出、导入迁移账号。导出文件由你设置的密码加密，请把密码单独保存好。</p>
-          </div>
-        </article>
-      </div>
-      <div class="te-help-note-wrap">
-        <strong>自动维护</strong>
-        <p class="te-feature-checkin">每天自动核对签到状态，并在需要时更新账号信息。</p>
-        <p>只在登录信息临近到期时才更新，避免频繁操作影响其他设备。</p>
-      </div>
-      <details class="te-help-details">
+          <span class="te-badge te-update-badge">未检查</span>
+        </div>
+        <p class="te-update-state"></p>
+        <div class="te-update-notes" hidden></div>
+        <ol class="te-update-steps" hidden>
+          <li>点「立即升级」打开下载页，把新版装好。</li>
+          <li>回到 TRAE 点「重载界面」，面板就会换成新版。</li>
+        </ol>
+        <div class="te-update-actions">
+          <button class="te-primary te-update-open" type="button" hidden>立即升级</button>
+          <button class="te-secondary te-update-check" type="button">检查更新</button>
+          <button class="te-secondary te-update-reload" type="button" hidden>重载界面</button>
+        </div>
+      </section>
+      <section class="te-section">
+        <div class="te-section-title">三步上手</div>
+        <div class="te-feature-list">
+          <article class="te-feature">
+            <span class="te-feature-icon">1</span>
+            <div>
+              <span class="te-feature-title">添加账号</span>
+              <span class="te-feature-desc">点「登录」，推荐选择「无感登录」。在浏览器完成授权后，账号会自动出现在列表里。</span>
+            </div>
+          </article>
+          <article class="te-feature">
+            <span class="te-feature-icon">2</span>
+            <div>
+              <span class="te-feature-title">切换账号</span>
+              <span class="te-feature-desc">点账号卡片右侧的切换按钮。TRAE 会短时间重启，原来的账号会自动备份，失败也会恢复。</span>
+            </div>
+          </article>
+          <article class="te-feature">
+            <span class="te-feature-icon">3</span>
+            <div>
+              <span class="te-feature-title">换电脑</span>
+              <span class="te-feature-desc">用导出、导入迁移账号。导出文件由你设置的密码加密，请把密码单独保存好。</span>
+            </div>
+          </article>
+        </div>
+      </section>
+      <section class="te-section">
+        <div class="te-section-title">自动维护</div>
+        <p class="te-section-hint te-feature-checkin">每天自动核对签到状态，并在需要时更新账号信息。</p>
+        <p class="te-section-hint">只在登录信息临近到期时才更新，避免频繁操作影响其他设备。</p>
+      </section>
+      <details class="te-about-details">
         <summary>数据安全</summary>
         <p>导出后的账号是一份搬迁副本，不是共享账号。原设备继续使用或更新登录信息后，另一台设备上的副本可能失效，需要重新登录。</p>
       </details>
-      <footer class="te-help-version">TRAE SOLO CN Enhancer v${APP_VERSION}</footer>
     </div>
   `;
+
+  const updateTabDot = tabs.querySelector(".te-tab-dot");
+  const updateUi = {
+    badge: aboutPane.querySelector(".te-update-badge"),
+    state: aboutPane.querySelector(".te-update-state"),
+    notes: aboutPane.querySelector(".te-update-notes"),
+    steps: aboutPane.querySelector(".te-update-steps"),
+    open: aboutPane.querySelector(".te-update-open"),
+    check: aboutPane.querySelector(".te-update-check"),
+    reload: aboutPane.querySelector(".te-update-reload"),
+  };
 
   const settingsPane = document.createElement("div");
   settingsPane.className = "te-pane";
@@ -1212,33 +1413,97 @@
       </nav>
       <div class="te-settings-panels">
         <section class="te-settings-panel active" data-settings-panel="checkin">
-          <div class="te-settings-panel-head">
-            <div><h2>自动签到</h2><p>只给今天还没签到的账号补领，不会切换当前账号。</p></div>
-            <span class="te-badge te-checkin-badge">未读取</span>
-          </div>
           <div class="te-section">
-            <label class="te-field"><span>自动签到</span><select class="te-select te-checkin-auto"><option value="on">开启</option><option value="off">关闭</option></select></label>
-            <label class="te-field"><span>检查间隔</span><select class="te-select te-checkin-interval"></select></label>
-            <label class="te-field"><span>页面加载时补签</span><select class="te-select te-checkin-clientload"><option value="on">开启</option><option value="off">关闭</option></select></label>
+            <div class="te-card-head">
+              <div>
+                <div class="te-card-title">自动签到</div>
+                <p class="te-card-sub">只给今天还没签到的账号补领，不会切换当前账号。</p>
+              </div>
+              <span class="te-badge te-checkin-badge">未读取</span>
+            </div>
+            <div class="te-set-rows">
+              <label class="te-set-row">
+                <span class="te-set-text">
+                  <span class="te-set-name">自动签到</span>
+                  <span class="te-set-hint">关闭后仍可手动领取，打开面板时也会核对一次</span>
+                </span>
+                <select class="te-select te-checkin-auto"><option value="on">开启</option><option value="off">关闭</option></select>
+              </label>
+              <label class="te-set-row">
+                <span class="te-set-text">
+                  <span class="te-set-name">检查间隔</span>
+                  <span class="te-set-hint">每隔多久扫一次，发现还没领的账号就补上</span>
+                </span>
+                <select class="te-select te-checkin-interval"></select>
+              </label>
+              <label class="te-set-row">
+                <span class="te-set-text">
+                  <span class="te-set-name">页面加载时补签</span>
+                  <span class="te-set-hint">TRAE 重启后立刻检查一次，不用等间隔</span>
+                </span>
+                <select class="te-select te-checkin-clientload"><option value="on">开启</option><option value="off">关闭</option></select>
+              </label>
+            </div>
             <div class="te-status-list te-checkin-status"></div>
-            <div class="te-section-actions"><button class="te-primary te-checkin-save" type="button">保存</button></div>
+            <div class="te-section-actions"><button class="te-primary te-checkin-save" type="button">保存设置</button></div>
           </div>
         </section>
         <section class="te-settings-panel" data-settings-panel="update">
-          <div class="te-settings-panel-head">
-            <div><h2>TRAE 更新</h2><p>关闭自动检查可以避免更新打断当前会话，手动更新仍然可用。</p></div>
-            <span class="te-badge te-trae-badge">未读取</span>
+          <div class="te-section">
+            <div class="te-card-head">
+              <div>
+                <div class="te-card-title">TRAE 自动更新</div>
+                <p class="te-card-sub">关闭后 TRAE 不会自己升级，手动检查更新照常可用。</p>
+              </div>
+              <span class="te-badge te-trae-badge">未读取</span>
+            </div>
+            <div class="te-set-rows">
+              <label class="te-set-row">
+                <span class="te-set-text">
+                  <span class="te-set-name">更新方式</span>
+                  <span class="te-set-hint">推荐禁止，避免升级打断正在进行的会话；改的是 TRAE 自己的设置文件</span>
+                </span>
+                <select class="te-select te-trae-mode"><option value="suppress">禁止自动更新</option><option value="allow">允许自动更新</option></select>
+              </label>
+            </div>
+            <div class="te-status-list te-trae-status"></div>
+            <div class="te-section-actions"><button class="te-primary te-trae-save" type="button">保存设置</button></div>
+            <div class="te-restart-banner te-trae-restart"><span>已保存，重启 TRAE 后生效。</span></div>
           </div>
           <div class="te-section">
-            <select class="te-select te-trae-mode"><option value="suppress">禁止自动更新（推荐）</option><option value="allow">允许自动更新</option></select>
-            <div class="te-status-list te-trae-status"></div>
-            <div class="te-section-actions"><button class="te-primary te-trae-save" type="button">保存</button></div>
-            <div class="te-restart-banner te-trae-restart"><span>已保存，重启 TRAE 后生效。</span></div>
+            <div class="te-card-head">
+              <div>
+                <div class="te-card-title">助手更新</div>
+                <p class="te-card-sub">发现新版本后「关于」页会亮起小红点。只读取公开的发布信息，不涉及账号数据。</p>
+              </div>
+              <span class="te-badge te-app-update-badge">未读取</span>
+            </div>
+            <div class="te-set-rows">
+              <label class="te-set-row">
+                <span class="te-set-text">
+                  <span class="te-set-name">自动检查</span>
+                  <span class="te-set-hint">关闭后仍可用「立即检查」手动查一次</span>
+                </span>
+                <select class="te-select te-app-update-auto"><option value="on">开启</option><option value="off">关闭</option></select>
+              </label>
+            </div>
+            <div class="te-status-list te-app-update-status"></div>
+            <div class="te-section-actions">
+              <button class="te-primary te-app-update-save" type="button">保存设置</button>
+              <button class="te-secondary te-app-update-check" type="button">立即检查</button>
+            </div>
           </div>
         </section>
         <section class="te-settings-panel" data-settings-panel="maintenance">
-          <div class="te-settings-panel-head"><div><h2>后台服务</h2><p>遇到面板没有响应时，可以单独重启助手自己的后台服务。</p></div></div>
-          <div class="te-section"><div class="te-section-actions"><button class="te-secondary te-daemon-restart" type="button">重启后台服务</button></div></div>
+          <div class="te-section">
+            <div class="te-card-head">
+              <div>
+                <div class="te-card-title">后台服务</div>
+                <p class="te-card-sub">面板没有响应时，可以单独重启助手自己的后台服务。账号数据和设置都不受影响。</p>
+              </div>
+            </div>
+            <div class="te-section-actions"><button class="te-secondary te-daemon-restart" type="button">重启后台服务</button></div>
+          </div>
         </section>
       </div>
     </div>
@@ -1316,13 +1581,9 @@
     <div class="te-modal" role="dialog" aria-modal="true" aria-label="删除账号备份">
       <div class="te-modal-title">删除账号备份</div>
       <div class="te-modal-status te-delete-status"></div>
-      <label class="te-field">
-        <span>输入“删除”确认</span>
-        <input class="te-delete-confirm" type="text" autocomplete="off" spellcheck="false" placeholder="删除">
-      </label>
       <div class="te-modal-actions">
         <button class="te-secondary te-delete-cancel" type="button">取消</button>
-        <button class="te-danger te-delete-submit" type="button" disabled>删除</button>
+        <button class="te-danger te-delete-submit" type="button">删除</button>
       </div>
     </div>
   `;
@@ -1640,6 +1901,20 @@
             <path d="M4 17h12"/>
           </svg>
         `;
+        const renew = document.createElement("button");
+        renew.className = "te-icon-btn te-acc-renew";
+        renew.type = "button";
+        renew.title =
+          "续签：现在就换一份新的登录信息，把有效期推后。其他设备上的这个账号需要重新登录。";
+        renew.setAttribute("aria-label", `为 ${account.displayName || "该账号"} 续签`);
+        renew.dataset.accountId = account.id;
+        renew.innerHTML = `
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
+            <path d="M21 3v6h-6"/>
+            <path d="M12 8v4l3 2"/>
+          </svg>
+        `;
         const remove = document.createElement("button");
         remove.className = "te-icon-btn te-acc-delete";
         remove.type = "button";
@@ -1651,7 +1926,7 @@
             <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/>
           </svg>
         `;
-        ops.append(action, remove);
+        ops.append(renew, action, remove);
       }
       row.append(main, ops);
 
@@ -1726,8 +2001,7 @@
         status.textContent = health.cdpConnected ? "CDP 已连接" : "等待 CDP";
       }
       accountCount = data.accounts.length;
-      header.querySelector(".te-subtitle").textContent =
-        activeTab === "about" ? `v${APP_VERSION}` : `账号 ${accountCount}`;
+      renderHeaderSubtitle();
       renderAccounts(data.accounts, data.currentAccountId, data.currentAccountState);
       return data;
     } catch (error) {
@@ -1767,6 +2041,19 @@
     if (backup.ok) await reconcileWithDaemon();
   }
 
+  /**
+   * Keeps the header caption in step with the active tab.
+   *
+   * Both a tab switch and a background refresh have to write it, and the shared
+   * helper is what stops a refresh from relabelling the settings tab as the
+   * account count. The About pane shows the version in its own hero, so the
+   * caption names the tab instead of repeating it.
+   */
+  function renderHeaderSubtitle() {
+    header.querySelector(".te-subtitle").textContent =
+      activeTab === "about" ? "关于" : activeTab === "settings" ? "设置" : `账号 ${accountCount}`;
+  }
+
   function switchTab(name) {
     activeTab = name === "about" ? "about" : name === "settings" ? "settings" : "account";
     tabs.querySelectorAll(".te-tab").forEach((tab) => {
@@ -1775,15 +2062,12 @@
     content.querySelectorAll(".te-pane").forEach((pane) => {
       pane.classList.toggle("active", pane.dataset.pane === activeTab);
     });
-    header.querySelector(".te-subtitle").textContent =
-      activeTab === "about"
-        ? `v${APP_VERSION}`
-        : activeTab === "settings"
-          ? "设置"
-          : `账号 ${accountCount}`;
+    renderHeaderSubtitle();
     // Read once, then keep whatever the user has typed: re-reading on every tab
     // switch would silently discard an edit in progress.
     if (activeTab === "settings" && !settingsLoaded) loadSettings().catch(() => {});
+    // Only the cached result is read, so switching tabs never reaches the network.
+    if (activeTab === "about") loadAppUpdate().catch(() => {});
   }
 
   function switchSettingsSection(name) {
@@ -1882,6 +2166,11 @@
     checkinClientLoad: settingsPane.querySelector(".te-checkin-clientload"),
     checkinStatus: settingsPane.querySelector(".te-checkin-status"),
     checkinSave: settingsPane.querySelector(".te-checkin-save"),
+    appUpdateBadge: settingsPane.querySelector(".te-app-update-badge"),
+    appUpdateAuto: settingsPane.querySelector(".te-app-update-auto"),
+    appUpdateStatus: settingsPane.querySelector(".te-app-update-status"),
+    appUpdateSave: settingsPane.querySelector(".te-app-update-save"),
+    appUpdateCheck: settingsPane.querySelector(".te-app-update-check"),
   };
   let settingsLoaded = false;
   let traeUpdateNoticeShown = false;
@@ -1994,15 +2283,12 @@
     settingsUi.checkinBadge.className = `te-badge te-checkin-badge${checkin.auto ? " ok" : ""}`;
     settingsUi.checkinBadge.textContent = checkin.auto ? "已开启" : "已关闭";
 
+    // When it is on, the rows above already spell out the interval and the
+    // restart behaviour, so repeating them here is noise. The note is only worth
+    // a line when it is off: that is the state where "nothing runs by itself any
+    // more" has to be said out loud. An empty list collapses on its own.
     settingsUi.checkinStatus.textContent = "";
-    if (checkin.auto) {
-      appendStatusLine(settingsUi.checkinStatus, "检查间隔", `每 ${checkin.intervalMinutes} 分钟`);
-      appendStatusLine(
-        settingsUi.checkinStatus,
-        "页面加载",
-        checkin.onClientLoad ? "TRAE 重启后立即补签" : "不补签，等下一次检查",
-      );
-    } else {
+    if (!checkin.auto) {
       appendStatusLine(
         settingsUi.checkinStatus,
         "说明",
@@ -2068,11 +2354,274 @@
     }
   }
 
+  /* -----------------------------------------------------------------------
+   * Assistant update
+   *
+   * The panel never talks to GitHub itself: the workbench CSP blocks that, and
+   * the daemon already checks once a day. Opening the About tab only reads the
+   * daemon's cached result, and a new release arrives as a pushed event.
+   * --------------------------------------------------------------------- */
+
+  let appUpdateSnapshot = null;
+  let appUpdateConfig = null;
+  let appUpdateBusy = false;
+
+  /**
+   * Renders the small Markdown subset used by release notes.
+   *
+   * Every string comes from GitHub and is therefore untrusted, so nothing is
+   * parsed as HTML — headings, bullets, code and bold text are built as nodes
+   * with `textContent`. Links are shown as text plus their address rather than
+   * an <a>: following one inside the workbench page would navigate the IDE away
+   * from its own UI.
+   */
+  function appendUpdateInline(node, text) {
+    const pattern = /`([^`]+)`|\*\*([^*]+)\*\*|\[([^\]]+)\]\(([^)\s]+)\)/g;
+    let lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(text))) {
+      if (match.index > lastIndex) node.append(text.slice(lastIndex, match.index));
+      if (match[1] !== undefined) {
+        const code = document.createElement("code");
+        code.textContent = match[1];
+        node.append(code);
+      } else if (match[2] !== undefined) {
+        const strong = document.createElement("strong");
+        strong.textContent = match[2];
+        node.append(strong);
+      } else {
+        node.append(`${match[3]} `);
+        const code = document.createElement("code");
+        code.textContent = match[4];
+        node.append(code);
+      }
+      lastIndex = pattern.lastIndex;
+    }
+    if (lastIndex < text.length) node.append(text.slice(lastIndex));
+  }
+
+  function renderUpdateNotes(container, markdown) {
+    container.textContent = "";
+    let list = null;
+    for (const raw of String(markdown || "").split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line) {
+        list = null;
+        continue;
+      }
+      const heading = /^#{1,4}\s+(.*)$/.exec(line);
+      if (heading) {
+        list = null;
+        const element = document.createElement("h4");
+        element.textContent = heading[1];
+        container.append(element);
+        continue;
+      }
+      const bullet = /^[-*+]\s+(.*)$/.exec(line);
+      if (bullet) {
+        if (!list) {
+          list = document.createElement("ul");
+          container.append(list);
+        }
+        const item = document.createElement("li");
+        appendUpdateInline(item, bullet[1]);
+        list.append(item);
+        continue;
+      }
+      list = null;
+      const paragraph = document.createElement("p");
+      appendUpdateInline(paragraph, line);
+      container.append(paragraph);
+    }
+  }
+
+  /**
+   * Paints the About card from one `/api/update` payload.
+   *
+   * A failed check is reported as a failed check, never as "已是最新": the two
+   * look identical to the user otherwise, and only one of them is true.
+   */
+  function renderAppUpdate(update) {
+    if (!update) return;
+    appUpdateSnapshot = update;
+    const hasUpdate = Boolean(update.hasUpdate);
+    const latest = update.latest;
+    updateTabDot.hidden = !hasUpdate;
+
+    let tone = "";
+    let badge = "未检查";
+    if (hasUpdate) {
+      badge = `有新版 v${latest.version}`;
+      tone = " warn";
+    } else if (update.error) {
+      badge = "检查失败";
+      tone = " warn";
+    } else if (update.checkedAt) {
+      badge = "已是最新";
+      tone = " ok";
+    }
+    updateUi.badge.className = `te-badge te-update-badge${tone}`;
+    updateUi.badge.textContent = badge;
+
+    const lines = [];
+    if (hasUpdate) lines.push(`发现新版本 v${latest.version}，当前 v${update.current}。`);
+    else if (update.checkedAt) lines.push(`已是最新版本（v${update.current}）。`);
+    else lines.push("还没有检查过更新。点「检查更新」可以立刻查一次。");
+    if (update.error) lines.push(`上次检查失败：${update.error}`);
+    else if (update.checkedAt) lines.push(`上次检查：${formatExpiry(update.checkedAt)}`);
+    updateUi.state.textContent = lines.join(" ");
+
+    const notes = hasUpdate ? String(latest?.notes || "").trim() : "";
+    if (notes) {
+      renderUpdateNotes(updateUi.notes, notes);
+      updateUi.notes.hidden = false;
+    } else {
+      updateUi.notes.textContent = "";
+      updateUi.notes.hidden = true;
+    }
+    // The upgrade steps only make sense next to a version to upgrade to.
+    updateUi.steps.hidden = !hasUpdate;
+    updateUi.open.hidden = !hasUpdate;
+    updateUi.reload.hidden = !hasUpdate;
+    updateUi.check.textContent = hasUpdate ? "重新检查" : "检查更新";
+    if (appUpdateConfig) renderAppUpdateConfig(appUpdateConfig, update);
+  }
+
+  async function loadAppUpdate() {
+    try {
+      renderAppUpdate(await api("/api/update"));
+    } catch {
+      // The daemon is unreachable; the card keeps its previous state and the
+      // footer already reports the outage.
+    }
+  }
+
+  async function checkAppUpdate({ silent = false } = {}) {
+    if (appUpdateBusy) return null;
+    appUpdateBusy = true;
+    updateUi.check.disabled = true;
+    settingsUi.appUpdateCheck.disabled = true;
+    try {
+      const data = await api("/api/update/check", {
+        method: "POST",
+        body: JSON.stringify({ force: true }),
+      });
+      renderAppUpdate(data);
+      if (!silent) {
+        if (data.hasUpdate) showToast(`发现新版本 v${data.latest.version}`);
+        else if (data.error) showToast(`检查更新失败：${data.error}`, true);
+        else showToast("已是最新版本");
+      }
+      return data;
+    } catch (error) {
+      if (!silent) showToast(error.message || String(error), true);
+      return null;
+    } finally {
+      appUpdateBusy = false;
+      updateUi.check.disabled = false;
+      settingsUi.appUpdateCheck.disabled = false;
+    }
+  }
+
+  async function openUpdatePage() {
+    updateUi.open.disabled = true;
+    try {
+      await api("/api/update/open", { method: "POST", body: "{}" });
+      showToast("已在浏览器打开下载页；装好新版后回到 TRAE 点「重载界面」");
+    } catch (error) {
+      showToast(error.message || String(error), true);
+    } finally {
+      updateUi.open.disabled = false;
+    }
+  }
+
+  /**
+   * Re-injects the panel from the running daemon.
+   *
+   * `POST /api/inject` hands the current script to the renderer, whose first
+   * lines remove this panel and its style, so this instance is gone the moment
+   * the daemon answers. The pause is only so the toast is visible before the
+   * panel disappears under the user's cursor.
+   */
+  async function reloadPanel() {
+    updateUi.reload.disabled = true;
+    showToast("正在重载界面…");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    try {
+      await api("/api/inject", { method: "POST", body: "{}" });
+    } catch (error) {
+      updateUi.reload.disabled = false;
+      showToast(error.message || String(error), true);
+    }
+  }
+
+  function handleUpdateAvailable() {
+    updateTabDot.hidden = false;
+    if (activeTab === "about") loadAppUpdate().catch(() => {});
+    else showToast("发现新版本，可在「关于」页查看");
+  }
+  window.addEventListener(UPDATE_AVAILABLE_EVENT, handleUpdateAvailable);
+
+  function renderAppUpdateConfig(appUpdate, update) {
+    if (!appUpdate) return;
+    appUpdateConfig = appUpdate;
+    settingsUi.appUpdateAuto.value = appUpdate.autoCheck ? "on" : "off";
+    settingsUi.appUpdateBadge.className =
+      `te-badge te-app-update-badge${appUpdate.autoCheck ? " ok" : ""}`;
+    settingsUi.appUpdateBadge.textContent = appUpdate.autoCheck ? "已开启" : "已关闭";
+
+    settingsUi.appUpdateStatus.textContent = "";
+    appendStatusLine(
+      settingsUi.appUpdateStatus,
+      "检查频率",
+      appUpdate.autoCheck ? "每天一次" : "自动检查已关闭，「立即检查」仍然可用",
+    );
+    if (update?.error) {
+      appendStatusLine(settingsUi.appUpdateStatus, "上次结果", `检查失败：${update.error}`);
+    } else if (update?.checkedAt) {
+      appendStatusLine(
+        settingsUi.appUpdateStatus,
+        "上次结果",
+        update.hasUpdate ? `发现新版本 v${update.latest.version}` : "已是最新版本",
+      );
+      appendStatusLine(settingsUi.appUpdateStatus, "上次检查", formatExpiry(update.checkedAt));
+    }
+  }
+
+  async function saveAppUpdateConfig() {
+    const autoCheck = settingsUi.appUpdateAuto.value === "on";
+    settingsUi.appUpdateSave.disabled = true;
+    try {
+      const data = await api("/api/settings/app-update", {
+        method: "POST",
+        body: JSON.stringify({ autoCheck }),
+      });
+      renderAppUpdateConfig(data.appUpdate, appUpdateSnapshot);
+      showToast(autoCheck ? "已保存：后台每天检查一次更新" : "已关闭自动检查");
+      // Turning it on is the user's own click, so this is the same deliberate
+      // request as「立即检查」— and it is the only way a result appears without
+      // waiting for the next daily sweep.
+      if (autoCheck && !appUpdateSnapshot?.checkedAt) {
+        await checkAppUpdate({ silent: true });
+      }
+    } catch (error) {
+      showToast(error.message || String(error), true);
+    } finally {
+      settingsUi.appUpdateSave.disabled = false;
+    }
+  }
+
   async function loadSettings({ silent = false } = {}) {
     try {
-      const data = await api("/api/settings");
+      const [data, update] = await Promise.all([
+        api("/api/settings"),
+        api("/api/update").catch(() => null),
+      ]);
       renderTraeUpdate(data.traeUpdate);
       renderCheckin(data.checkin);
+      // `/api/update` is the cached result, so the section reports the last check
+      // without the settings tab ever reaching the network.
+      renderAppUpdateConfig(data.appUpdate, update ?? appUpdateSnapshot);
       settingsLoaded = true;
     } catch (error) {
       settingsUi.traeBadge.className = "te-badge te-trae-badge warn";
@@ -2206,24 +2755,52 @@
     }
   }
 
+  /**
+   * Asks the daemon to exchange this account's credentials right now.
+   *
+   * The card's「有效期至」is the only thing the user is asked to read; the panel
+   * never mentions token kinds. When the server does not hand back a new expiry
+   * the stored date is unchanged, and the panel says exactly that rather than
+   * reporting a renewal it cannot prove.
+   */
+  async function renewAccount(button, accountId) {
+    const card = button.closest(".te-card");
+    const name = card?.querySelector(".te-name")?.textContent || "目标账号";
+    button.disabled = true;
+    showToast(`正在为「${name}」续签...`);
+    try {
+      const result = await api("/api/accounts/renew", {
+        method: "POST",
+        body: JSON.stringify({ accountId }),
+      });
+      if (result.renewed) {
+        showToast(`「${name}」已续签，有效期至 ${formatExpiry(result.accessExpiresAt)}`);
+      } else {
+        showToast("未取得新的到期时间，无法确认是否续期", true);
+      }
+      await refresh();
+    } catch (error) {
+      showToast(error.message || String(error), true);
+      await refresh();
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   function openDeleteDialog(account) {
     deleteAccountId = account.id;
     deleteAccountName = account.displayName || "该账号";
     const status = deleteMask.querySelector(".te-delete-status");
     status.textContent = `将删除「${deleteAccountName}」的本地备份。不会退出 TRAE 当前登录，也不能在助手内撤销。`;
-    const input = deleteMask.querySelector(".te-delete-confirm");
-    input.value = "";
-    deleteMask.querySelector(".te-delete-submit").disabled = true;
+    deleteMask.querySelector(".te-delete-submit").disabled = false;
+    deleteMask.querySelector(".te-delete-cancel").focus();
     deleteMask.classList.add("open");
-    input.focus();
   }
 
   function closeDeleteDialog() {
     deleteMask.classList.remove("open");
     deleteAccountId = null;
     deleteAccountName = "";
-    deleteMask.querySelector(".te-delete-confirm").value = "";
-    deleteMask.querySelector(".te-delete-submit").disabled = true;
   }
 
   async function confirmDeleteAccount() {
@@ -2709,6 +3286,9 @@
     // fallback for the moment the panel is opened. Kept because it is the one path
     // that works when the daemon has been running since before TRAE was signed in.
     void refreshAboutCheckinText();
+    // Paints whatever the daemon last found, so the About card is filled before
+    // the tab is ever opened.
+    void loadAppUpdate();
     // Paint "同步中" first: until the daemon answers, an account with no local
     // check-in record may well already be checked in on the server.
     syncingCheckin = true;
@@ -2791,6 +3371,21 @@
   settingsUi.checkinAuto.addEventListener("change", () => {
     applyCheckinVisibility(settingsUi.checkinAuto.value === "on");
   });
+  updateUi.check.addEventListener("click", () => {
+    checkAppUpdate().catch(() => {});
+  });
+  updateUi.open.addEventListener("click", () => {
+    openUpdatePage().catch(() => {});
+  });
+  updateUi.reload.addEventListener("click", () => {
+    reloadPanel().catch(() => {});
+  });
+  settingsUi.appUpdateSave.addEventListener("click", () => {
+    saveAppUpdateConfig().catch(() => {});
+  });
+  settingsUi.appUpdateCheck.addEventListener("click", () => {
+    checkAppUpdate().catch(() => {});
+  });
   for (const button of settingsUi.restartButtons) {
     button.addEventListener("click", () => {
       requestDaemonRestart().catch(() => {});
@@ -2803,12 +3398,14 @@
       if (account) openDeleteDialog(account);
       return;
     }
+    const renewButton = event.target.closest(".te-acc-renew");
+    if (renewButton?.dataset.accountId) {
+      renewAccount(renewButton, renewButton.dataset.accountId).catch(() => {});
+      return;
+    }
     const button = event.target.closest(".te-acc-switch");
     if (!button?.dataset.accountId) return;
     switchAccount(button, button.dataset.accountId).catch(() => {});
-  });
-  deleteMask.querySelector(".te-delete-confirm").addEventListener("input", (event) => {
-    deleteMask.querySelector(".te-delete-submit").disabled = event.target.value.trim() !== "删除";
   });
   deleteMask.querySelector(".te-delete-cancel").addEventListener("click", closeDeleteDialog);
   deleteMask.querySelector(".te-delete-submit").addEventListener("click", () => {
@@ -2897,6 +3494,7 @@
     clearTimeout(toastTimer);
     clearTimeout(accountsUpdatedTimer);
     window.removeEventListener(ACCOUNTS_UPDATED_EVENT, handleAccountsUpdated);
+    window.removeEventListener(UPDATE_AVAILABLE_EVENT, handleUpdateAvailable);
     stopOAuthPolling();
     stopFakeLogoutPolling();
     root.remove();
