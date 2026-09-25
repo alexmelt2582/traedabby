@@ -11,7 +11,7 @@
 - 用户说“验收通过，发布 vX.Y.Z”后，AI 才能执行发布。
 - 发布动作：合并功能分支到 `main`，推送 `main`，打标签 `vX.Y.Z`，推送标签。
 - 发布不经过 GitHub Actions，也没有 `.github/workflows`，禁止把发布步骤移回 Actions：全部在本地完成。`npm run release:pack`
-  构建并汇总产物到 `dist/release/`；发布说明写入 `docs/releases/vX.Y.Z.md`，先提交再打标签，
+  构建并汇总产物到 `dist/release/vX.Y.Z/`（每个版本一个目录，互不覆盖）；发布说明写入 `docs/releases/vX.Y.Z.md`，先提交再打标签，
   使标签指向的提交自带该版本说明；推送标签后用 `npm run release:publish` 创建 Release 并上传产物。
 - 禁止创建 `release/*` 或 `develop` 分支。
 - 禁止强制推送 `main`。
