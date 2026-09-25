@@ -125,6 +125,23 @@ test("the portable release archive lists its payload instead of the whole folder
   assert.match(text, /\^\(data\|logs\)/);
 });
 
+test("release artifacts go into a per-version folder instead of the release root", async () => {
+  const pack = (await read("scripts/release-pack.js")).toString("utf8");
+  const publish = (await read("scripts/release-publish.js")).toString("utf8");
+
+  // The release root used to hold the newest artifacts flat while older releases
+  // sat in per-version folders, so packing the next version deleted the previous
+  // one's files. Both scripts must agree on `dist/release/v<version>/` so every
+  // released version keeps its own files side by side.
+  assert.match(pack, /path\.join\(RELEASE_DIR, `v\$\{version\}`\)/);
+  assert.match(publish, /path\.join\(RELEASE_DIR, `v\$\{version\}`/);
+  assert.equal(
+    /readdir\(RELEASE_DIR/.test(pack),
+    false,
+    "pack must not clean the shared release root",
+  );
+});
+
 test("the third-party Simplified Chinese translation is not rewritten", async () => {
   const bytes = await read("scripts/win/ChineseSimplified.isl");
   assert.equal(

@@ -172,10 +172,12 @@ async function main() {
   log(`版本 ${tag}${DRY_RUN ? "（--dry-run，不会创建 Release）" : ""}`);
 
   const notesPath = path.join(PROJECT_ROOT, "docs", "releases", `${tag}.md`);
+  // Artifacts live in the folder `npm run release:pack` wrote for this version;
+  // gh names the uploaded assets after each file's basename.
   const artifacts = [
-    path.join(RELEASE_DIR, `${SETUP_BASE}-${version}.exe`),
-    path.join(RELEASE_DIR, `${PORTABLE_BASE}-${version}.zip`),
-    path.join(RELEASE_DIR, CHECKSUM_FILE),
+    path.join(RELEASE_DIR, `v${version}`, `${SETUP_BASE}-${version}.exe`),
+    path.join(RELEASE_DIR, `v${version}`, `${PORTABLE_BASE}-${version}.zip`),
+    path.join(RELEASE_DIR, `v${version}`, CHECKSUM_FILE),
   ];
 
   await assertNotes(notesPath);

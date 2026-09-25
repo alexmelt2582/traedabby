@@ -203,7 +203,7 @@ AI 应告诉你产物路径，例如：
 **AI 执行**：
 
 ```bash
-# 1. 构建便携版与安装包，并汇总到 dist/release/
+# 1. 构建便携版与安装包，并汇总到 dist/release/vX.Y.Z/
 npm run release:pack
 
 # 2. 编写发布说明 docs/releases/v0.1.0.md（“本次更新”“已知限制”）
@@ -239,7 +239,7 @@ git tag -a v0.1.0 -m "Release v0.1.0"
 # 6. 推送标签
 git push origin v0.1.0
 
-# 7. 创建 Release 并上传 dist/release/ 下的产物（以 docs/releases/v0.1.0.md 为正文）
+# 7. 创建 Release 并上传 dist/release/vX.Y.Z/ 下的产物（以 docs/releases/v0.1.0.md 为正文）
 npm run release:publish
 
 # 8. 删除功能分支
@@ -252,7 +252,7 @@ git push origin --delete feature/user-login
 | 校验 | 作用 |
 | :--- | :--- |
 | 发布说明存在且非空 | 避免发出空正文的 Release |
-| `dist/release/` 产物齐全 | 避免上传不完整或跨版本的产物 |
+| `dist/release/vX.Y.Z/` 产物齐全 | 避免上传不完整或跨版本的产物 |
 | 已跟踪文件无未提交改动 | 保证标签指向的是已提交、已审阅的代码 |
 | 本地标签指向当前 HEAD | 保证产物与将要发布的提交一致 |
 | origin 上的标签与本地是同一个标签对象 | 避免把 Release 挂到过期或被移动的标签上 |
@@ -273,7 +273,7 @@ git push origin --delete feature/user-login
 ```text
 AI 本地开发 → AI 本地生成验收包 → 你验收
                                       ↓
-                              验收通过 → AI 打包到 dist/release/ + 写发布说明 + 提交
+                              验收通过 → AI 打包到 dist/release/vX.Y.Z/ + 写发布说明 + 提交
                                       ↓
                               AI 合并 main + 打标签 + 推送 + 创建 Release 并上传产物
 ```
@@ -282,8 +282,8 @@ AI 本地开发 → AI 本地生成验收包 → 你验收
 
 | 命令 | 作用 | 何时执行 |
 | :--- | :--- | :--- |
-| `npm run release:pack` | 构建便携版与安装包，汇总到 `dist/release/` | 验收通过后，在功能分支上，提交发布说明之前 |
-| `npm run release:publish` | 校验并创建 GitHub Release，上传 `dist/release/` 下的产物 | 标签已推送到 origin 之后 |
+| `npm run release:pack` | 构建便携版与安装包，汇总到 `dist/release/vX.Y.Z/` | 验收通过后，在功能分支上，提交发布说明之前 |
+| `npm run release:publish` | 校验并创建 GitHub Release，上传 `dist/release/vX.Y.Z/` 下的产物 | 标签已推送到 origin 之后 |
 
 两个命令都只做本地动作或调用 `gh`，不触发任何云端构建。`release:publish --dry-run`
 可以先只跑校验。
@@ -298,7 +298,7 @@ AI 本地开发 → AI 本地生成验收包 → 你验收
 ### 4.3 如何查看发布结果
 
 - GitHub 仓库 → `Releases` 页面 → 查看已创建的 Release 与上传的产物
-- 本地 `dist/release/` → 查看本次实际打包出来的文件（脚本运行时会打印清单）
+- 本地 `dist/release/vX.Y.Z/` → 查看本次实际打包出来的文件（脚本运行时会打印清单）
 - 发布过程没有云端日志，AI 会把每一步的命令与输出贴出来，必要时自行复核
 
 ---

@@ -176,7 +176,7 @@ npm run check
 版本号需要同时修改 `package.json` 与 `src/constants.js`，并把发布说明写入 `docs/releases/vX.Y.Z.md`。
 发布说明要在打标签之前提交，使标签指向的提交自带该版本说明。
 
-打包并汇总产物到 `dist/release/`：
+打包并汇总产物到 `dist/release/vX.Y.Z/`：
 
 ```powershell
 npm run release:pack

@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 /**
  * Packs the local release: builds the portable executable and the installer,
- * then collects both artifacts into `dist/release/`.
+ * then collects both artifacts into `dist/release/v<version>/`.
  *
  * The GitHub Actions workflow that used to build these artifacts is gone, so
  * this is the only place release files are produced. It runs after local
- * acceptance and before the release-notes commit, the merge and the tag, so
- * `dist/release/` describes exactly one revision.
+ * acceptance and before the release-notes commit, the merge and the tag.
+ *
+ * Every version gets its own folder and nothing outside it is touched, so the
+ * earlier releases in `dist/release/` stay downloadable side by side.
  *
  * The portable folder is archived with the bundled `tar` (`-a` picks zip from
  * the extension), which is the same shape the workflow used to publish.
@@ -31,12 +33,10 @@ const SETUP_BASE = "TraeEnhancer-Setup";
 const PORTABLE_BASE = "TraeEnhancer-Portable";
 const CHECKSUM_FILE = "SHA256SUMS.txt";
 
-/** Generated file names cleared before every pack: a stale version must never survive. */
-const GENERATED = [
-  new RegExp(`^${SETUP_BASE}-.+\\.exe$`),
-  new RegExp(`^${PORTABLE_BASE}-.+\\.zip$`),
-  /^SHA256SUMS\.txt$/,
-];
+/** Folder holding one version's artifacts, so releases never overwrite each other. */
+function versionDir(version) {
+  return path.join(RELEASE_DIR, `v${version}`);
+}
 
 /**
  * Files the portable build ships, listed explicitly on purpose.
@@ -95,14 +95,13 @@ async function runBuildScript(relativePath) {
   }
 }
 
-async function clearGeneratedArtifacts() {
-  await fs.mkdir(RELEASE_DIR, { recursive: true });
-  const entries = await fs.readdir(RELEASE_DIR, { withFileTypes: true });
-  const stale = entries
-    .filter((entry) => entry.isFile() && GENERATED.some((pattern) => pattern.test(entry.name)))
-    .map((entry) => entry.name);
-  for (const name of stale) await fs.rm(path.join(RELEASE_DIR, name), { force: true });
-  if (stale.length) log(`清理旧产物：${stale.join(", ")}`);
+/**
+ * Rebuilds this version's folder from scratch, so a half-written artifact can
+ * never be uploaded. Other versions are left untouched.
+ */
+async function resetVersionDir(target) {
+  await fs.rm(target, { recursive: true, force: true });
+  await fs.mkdir(target, { recursive: true });
 }
 
 async function archivePortable(zipPath) {
@@ -170,16 +169,19 @@ async function assertArtifact(target, label) {
 
 async function main() {
   const version = await readVersion();
+  const target = versionDir(version);
+  const targetLabel = path.relative(PROJECT_ROOT, target).split(path.sep).join("/");
   log(`版本 v${version}`);
+  log(`产物目录 ${targetLabel}`);
 
-  await clearGeneratedArtifacts();
+  await resetVersionDir(target);
 
   await runBuildScript(path.join("scripts", "build-exe.js"));
   await runBuildScript(path.join("scripts", "win", "build-installer.js"));
 
   const setupSource = path.join(INSTALLER_DIR, `${SETUP_BASE}-${version}.exe`);
-  const zipPath = path.join(RELEASE_DIR, `${PORTABLE_BASE}-${version}.zip`);
-  const setupPath = path.join(RELEASE_DIR, `${SETUP_BASE}-${version}.exe`);
+  const zipPath = path.join(target, `${PORTABLE_BASE}-${version}.zip`);
+  const setupPath = path.join(target, `${SETUP_BASE}-${version}.exe`);
 
   await assertArtifact(setupSource, "安装包");
   await fs.copyFile(setupSource, setupPath);
@@ -192,19 +194,19 @@ async function main() {
 
   const lines = [];
   for (const [name, size] of sizes) {
-    const digest = await hashFile(path.join(RELEASE_DIR, name));
+    const digest = await hashFile(path.join(target, name));
     lines.push(`${digest}  ${name}`);
     log(`${name}  ${(size / 1048576).toFixed(1)} MB  sha256 ${digest}`);
   }
-  await fs.writeFile(path.join(RELEASE_DIR, CHECKSUM_FILE), `${lines.join("\n")}\n`, "utf8");
-  log(`已生成 dist/release/${CHECKSUM_FILE}`);
+  await fs.writeFile(path.join(target, CHECKSUM_FILE), `${lines.join("\n")}\n`, "utf8");
+  log(`已生成 ${targetLabel}/${CHECKSUM_FILE}`);
 
   const notesPath = path.join(PROJECT_ROOT, "docs", "releases", `v${version}.md`);
   if (!(await isFile(notesPath))) {
     log(`提醒：docs/releases/v${version}.md 还没有，发布前必须写好并提交`);
   }
 
-  log("打包完成，产物在 dist/release/");
+  log(`打包完成，产物在 ${targetLabel}/`);
   log("接下来：写发布说明 → 提交 → 合并 main → 打标签 → 推送 → npm run release:publish");
 }
 
