@@ -9,12 +9,14 @@ import {
   CHECKIN_DEFAULTS,
   CHECKIN_INTERVALS,
   CONFIG_FILE_NAME,
+  PROXY_DEFAULTS,
   configPath,
   loadAppConfig,
   normalizeAppUpdate,
   normalizeCheckin,
   normalizeCheckinInterval,
   normalizeConfig,
+  normalizeProxy,
   normalizeTraeExe,
   normalizeTraeUpdate,
   saveAppConfig,
@@ -26,6 +28,7 @@ const DEFAULTS = {
   traeUpdate: DEFAULT_TRAE_UPDATE,
   checkin: CHECKIN_DEFAULTS,
   appUpdate: APP_UPDATE_DEFAULTS,
+  proxy: PROXY_DEFAULTS,
 };
 
 test("a missing or empty trae path normalizes to null", () => {
@@ -106,7 +109,7 @@ test("a configuration written before the check-in block existed gains the defaul
   const migrated = normalizeConfig({ traeExe: null });
   assert.deepEqual(migrated.checkin, CHECKIN_DEFAULTS);
   assert.deepEqual(migrated.appUpdate, APP_UPDATE_DEFAULTS);
-  assert.equal(Object.hasOwn(migrated, "proxy"), false);
+  assert.deepEqual(migrated.proxy, PROXY_DEFAULTS);
 });
 
 test("the assistant update check defaults to on and only rejects a wrong container", () => {
@@ -140,8 +143,9 @@ test("a malformed configuration file is rejected instead of ignored", () => {
   assert.throws(() => normalizeConfig([]), /must contain a JSON object/);
   assert.throws(() => normalizeConfig("nope"), /must contain a JSON object/);
   assert.throws(() => normalizeConfig({ traeExe: "relative.exe" }), /absolute path/);
-  // Legacy proxy fields are ignored rather than rejected on the no-proxy branch.
-  assert.deepEqual(normalizeConfig({ proxy: [], useEnvProxy: "maybe" }), DEFAULTS);
+  // The proxy block is the exception: anything unrecognisable in it reads back as
+  // the default instead of making the file unreadable (see the migration test).
+  assert.deepEqual(normalizeConfig({ proxy: [] }).proxy, PROXY_DEFAULTS);
 });
 
 test("loading a missing configuration file yields defaults", async () => {
@@ -203,6 +207,135 @@ test("saving an invalid path does not overwrite a good configuration", async () 
       /must be an absolute path/,
     );
     assert.deepEqual(await loadAppConfig(dir), { ...DEFAULTS, traeExe: exe });
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the proxy defaults to direct, with no credential", () => {
+  assert.deepEqual(PROXY_DEFAULTS, {
+    mode: "off",
+    scheme: "http",
+    host: "",
+    port: 0,
+    username: "",
+    password: "",
+    noProxy: "",
+  });
+  assert.deepEqual(normalizeProxy(undefined), PROXY_DEFAULTS);
+  assert.deepEqual(normalizeProxy({}), PROXY_DEFAULTS);
+});
+
+test("an unknown proxy mode is rejected rather than coerced", () => {
+  assert.throws(() => normalizeProxy({ mode: "manual" }), /必须是 off \/ system \/ custom/);
+  assert.throws(() => normalizeProxy({ mode: "env" }), /必须是 off \/ system \/ custom/);
+});
+
+test("a custom proxy requires an address and an in-range port", () => {
+  assert.throws(() => normalizeProxy({ mode: "custom" }), /必须填写代理地址/);
+  assert.throws(() => normalizeProxy({ mode: "custom", host: "127.0.0.1" }), /端口/);
+  assert.throws(() => normalizeProxy({ mode: "custom", host: "127.0.0.1", port: 0 }), /端口/);
+  assert.throws(() => normalizeProxy({ mode: "custom", host: "127.0.0.1", port: 65536 }), /端口/);
+  assert.throws(
+    () => normalizeProxy({ mode: "custom", host: "127.0.0.1", port: 7890, scheme: "ftp" }),
+    /scheme/,
+  );
+  assert.deepEqual(normalizeProxy({ mode: "custom", host: " 127.0.0.1 ", port: "7890" }), {
+    ...PROXY_DEFAULTS,
+    mode: "custom",
+    host: "127.0.0.1",
+    port: 7890,
+  });
+});
+
+test("a non-custom mode may keep an empty port", () => {
+  // Switching back to `custom` must still find what the user typed, so `off`
+  // and `system` tolerate the fields being blank rather than rejecting the save.
+  assert.deepEqual(normalizeProxy({ mode: "off", port: "" }), PROXY_DEFAULTS);
+  assert.deepEqual(normalizeProxy({ mode: "system", port: "" }), {
+    ...PROXY_DEFAULTS,
+    mode: "system",
+  });
+});
+
+test("proxy credentials survive a round trip and the password keeps its spaces", () => {
+  const stored = normalizeProxy({
+    mode: "custom",
+    host: "127.0.0.1",
+    port: 7890,
+    username: "  alice  ",
+    password: "  s3cret  ",
+  });
+  assert.equal(stored.username, "alice");
+  assert.equal(stored.password, "  s3cret  ");
+});
+
+test("the exception list is trimmed, de-duplicated and comma-joined", () => {
+  assert.equal(
+    normalizeProxy({ mode: "off", noProxy: " *.corp.example.com , localhost ,*.corp.example.com,, " })
+      .noProxy,
+    "*.corp.example.com,localhost",
+  );
+});
+
+test("a null byte anywhere in a proxy field is rejected", () => {
+  assert.throws(
+    () => normalizeProxy({ mode: "custom", host: "127.0.0.1\0", port: 7890 }),
+    /null byte/,
+  );
+  assert.throws(
+    () => normalizeProxy({ mode: "custom", host: "127.0.0.1", port: 7890, password: "a\0b" }),
+    /null byte/,
+  );
+});
+
+test("a proxy block written before this namespace existed is migrated, never fatal", () => {
+  // A machine that had one of these on disk made `loadAppConfig` throw, which took
+  // down `locate`, `configure` and the daemon together: a leftover setting bricked
+  // the whole installation, including the installer's own configure step.
+  const manual = normalizeConfig({
+    proxy: { mode: "manual", url: "http://127.0.0.1:7890", noProxy: "*.corp.cn" },
+  });
+  assert.deepEqual(manual.proxy, {
+    ...PROXY_DEFAULTS,
+    mode: "custom",
+    host: "127.0.0.1",
+    port: 7890,
+    noProxy: "*.corp.cn",
+  });
+
+  assert.equal(normalizeConfig({ proxy: { mode: "env" } }).proxy.mode, "system");
+  assert.equal(normalizeConfig({ proxy: { mode: "system" } }).proxy.mode, "system");
+  assert.equal(normalizeConfig({ proxy: { mode: "off" } }).proxy.mode, "off");
+  // v1.0.0 wrote the boolean instead of a mode, meaning the same thing as `env`.
+  assert.equal(normalizeConfig({ useEnvProxy: true }).proxy.mode, "system");
+
+  // Nothing readable left to point at: direct is the honest answer, not a custom
+  // entry with an empty address that could never be saved again.
+  assert.equal(normalizeConfig({ proxy: { mode: "manual", url: "" } }).proxy.mode, "off");
+  assert.equal(normalizeConfig({ proxy: { mode: "manual", url: "http://" } }).proxy.mode, "off");
+  // A mode that is not ours either way still reads back as the default.
+  assert.equal(normalizeConfig({ proxy: { mode: "banana" } }).proxy.mode, "off");
+
+  // Migrating something already migrated must not move it again.
+  assert.deepEqual(normalizeConfig(manual), manual);
+
+  // Only stored values are lenient; the panel and the CLI still get an error.
+  assert.throws(() => normalizeProxy({ mode: "manual", url: "http://127.0.0.1:7890" }), /mode/);
+});
+
+test("saving a proxy block keeps the other settings", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "trae-config-"));
+  try {
+    await saveAppConfig(dir, { checkin: { auto: false } });
+    const saved = await saveAppConfig(dir, {
+      proxy: { mode: "custom", host: "127.0.0.1", port: 7890 },
+    });
+    assert.deepEqual(saved.proxy, { ...PROXY_DEFAULTS, mode: "custom", host: "127.0.0.1", port: 7890 });
+    assert.deepEqual(saved.checkin, { ...CHECKIN_DEFAULTS, auto: false });
+    // A rejected value must leave the file exactly as it was.
+    await assert.rejects(() => saveAppConfig(dir, { proxy: { mode: "custom" } }), /地址/);
+    assert.deepEqual((await loadAppConfig(dir)).proxy, saved.proxy);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }

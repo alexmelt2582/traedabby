@@ -1078,6 +1078,11 @@
       border-top: 1px solid color-mix(in srgb, var(--te-border) 62%, transparent);
     }
 
+    /* The prose row above draws its hairline on the row below, so the first row
+       still visible after a mode hides its siblings must drop it again —
+       otherwise a stray line floats above the single remaining field. */
+    #${ROOT_ID} .te-set-row.te-row-first { border-top: 0; }
+
     #${ROOT_ID} .te-set-text { min-width: 0; display: grid; gap: 2px; }
     #${ROOT_ID} .te-set-name { color: var(--te-text); font-size: 11.5px; font-weight: 600; }
 
@@ -1092,6 +1097,144 @@
       max-width: 172px;
       flex: 0 0 auto;
     }
+
+    /* ---- Proxy (settings › 网络) ----------------------------------------- */
+
+    /* Three exclusive modes as whole-card targets: the description stays
+       attached to the option it explains, instead of sitting in a paragraph the
+       reader has to map back onto a radio. */
+    #${ROOT_ID} .te-net-modes { display: grid; gap: 8px; margin-top: 12px; }
+
+    #${ROOT_ID} .te-net-mode {
+      display: grid;
+      grid-template-columns: 16px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+      padding: 10px 11px;
+      border: 1px solid var(--te-border);
+      border-radius: 10px;
+      background: var(--te-panel-solid);
+      cursor: pointer;
+    }
+
+    #${ROOT_ID} .te-net-mode:hover {
+      border-color: color-mix(in srgb, var(--te-accent) 45%, var(--te-border));
+    }
+
+    #${ROOT_ID} .te-net-mode.selected {
+      border-color: var(--te-accent);
+      background: color-mix(in srgb, var(--te-accent) 10%, var(--te-panel-solid));
+    }
+
+    #${ROOT_ID} .te-net-mode input {
+      margin: 2px 0 0;
+      accent-color: var(--te-accent);
+      cursor: pointer;
+    }
+
+    #${ROOT_ID} .te-net-mode-body { display: grid; gap: 2px; min-width: 0; }
+    #${ROOT_ID} .te-net-mode-name { font-size: 11.5px; font-weight: 650; }
+    #${ROOT_ID} .te-net-mode-desc { color: var(--te-muted); font-size: 10px; line-height: 1.5; }
+
+    #${ROOT_ID} .te-net-fields { margin-top: 2px; }
+
+    /* A settings-row control, sized to a value rather than to the full width, so
+       it reads on one line the way the select rows already do. */
+    #${ROOT_ID} .te-input {
+      flex: 0 0 auto;
+      width: 180px;
+      height: 30px;
+      padding: 0 9px;
+      border: 1px solid var(--te-border);
+      border-radius: 8px;
+      outline: 0;
+      color: var(--te-text);
+      background: var(--te-panel-solid);
+      font: inherit;
+      font-size: 11px;
+    }
+
+    #${ROOT_ID} .te-input:hover {
+      border-color: color-mix(in srgb, var(--te-accent) 45%, var(--te-border));
+    }
+
+    #${ROOT_ID} .te-input:focus-visible {
+      border-color: var(--te-accent);
+      box-shadow: 0 0 0 1px var(--te-accent);
+    }
+
+    #${ROOT_ID} .te-input::placeholder {
+      color: color-mix(in srgb, var(--te-muted) 82%, transparent);
+    }
+
+    #${ROOT_ID} .te-net-port { width: 86px; }
+
+    /* The plaintext-credential warning and the SOCKS5 note. Shop talk lives
+       here, never in the mode descriptions above. */
+    #${ROOT_ID} .te-net-note {
+      margin: 10px 0 0;
+      padding: 9px 10px;
+      border: 1px solid color-mix(in srgb, #d97706 34%, transparent);
+      border-radius: 9px;
+      background: color-mix(in srgb, #d97706 10%, transparent);
+      color: var(--te-text);
+      font-size: 10px;
+      line-height: 1.55;
+    }
+
+    #${ROOT_ID} .te-net-note.info {
+      border-color: color-mix(in srgb, var(--te-accent) 34%, transparent);
+      background: color-mix(in srgb, var(--te-accent) 9%, transparent);
+    }
+
+    #${ROOT_ID} .te-net-clear {
+      padding: 0;
+      border: 0;
+      color: var(--te-accent);
+      background: none;
+      font: inherit;
+      font-weight: 650;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+
+    /* One sentence of verdict, colour-coded to its severity. */
+    #${ROOT_ID} .te-net-verdict {
+      display: none;
+      margin-top: 12px;
+      padding: 9px 11px;
+      border: 1px solid var(--te-border);
+      border-left-width: 3px;
+      border-radius: 9px;
+      background: var(--te-panel-solid);
+      font-size: 10.5px;
+      line-height: 1.6;
+    }
+
+    #${ROOT_ID} .te-net-verdict.show { display: block; }
+    #${ROOT_ID} .te-net-verdict.ok { border-left-color: #16a34a; }
+    #${ROOT_ID} .te-net-verdict.hint { border-left-color: #d97706; }
+    #${ROOT_ID} .te-net-verdict.error { border-left-color: #ef4444; }
+
+    /* Advanced detail stays folded: the four primary controls above are the
+       whole of what a first-time user has to deal with. */
+    #${ROOT_ID} .te-net-advanced {
+      margin-top: 12px;
+      padding: 11px 12px;
+      border: 1px solid color-mix(in srgb, var(--te-border) 70%, transparent);
+      border-radius: 9px;
+      background: color-mix(in srgb, var(--te-surface) 60%, transparent);
+    }
+
+    #${ROOT_ID} .te-net-advanced summary {
+      color: var(--te-text);
+      font-size: 11px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    #${ROOT_ID} .te-net-advanced summary::marker { color: var(--te-accent); }
+    #${ROOT_ID} .te-net-advanced .te-status-list { margin-top: 8px; padding-top: 0; border-top: 0; }
 
     #${ROOT_ID} .te-danger {
       min-height: 32px;
@@ -1409,6 +1552,7 @@
       <nav class="te-settings-nav" aria-label="设置分类">
         <button class="te-settings-nav-item active" type="button" data-settings-section="checkin">签到</button>
         <button class="te-settings-nav-item" type="button" data-settings-section="update">更新</button>
+        <button class="te-settings-nav-item" type="button" data-settings-section="network">网络</button>
         <button class="te-settings-nav-item" type="button" data-settings-section="maintenance">维护</button>
       </nav>
       <div class="te-settings-panels">
@@ -1492,6 +1636,108 @@
               <button class="te-primary te-app-update-save" type="button">保存设置</button>
               <button class="te-secondary te-app-update-check" type="button">立即检查</button>
             </div>
+          </div>
+        </section>
+        <section class="te-settings-panel" data-settings-panel="network">
+          <div class="te-section">
+            <div class="te-card-head">
+              <div>
+                <div class="te-card-title">网络代理</div>
+                <p class="te-card-sub">需要经过代理才能连上 TRAE 服务器时，在这里设置。保存后立即生效，不用重启。</p>
+              </div>
+              <span class="te-badge te-net-badge">未读取</span>
+            </div>
+            <div class="te-net-modes" role="radiogroup" aria-label="代理模式">
+              <label class="te-net-mode selected">
+                <input type="radio" name="te-net-mode" value="off" checked>
+                <span class="te-net-mode-body">
+                  <span class="te-net-mode-name">不使用代理</span>
+                  <span class="te-net-mode-desc">直接连网，不经过代理。普通网络用这个。</span>
+                </span>
+              </label>
+              <label class="te-net-mode">
+                <input type="radio" name="te-net-mode" value="system">
+                <span class="te-net-mode-body">
+                  <span class="te-net-mode-name">使用系统代理</span>
+                  <span class="te-net-mode-desc">跟随 Windows 里已配置的代理，公司内网通常选这个。</span>
+                </span>
+              </label>
+              <label class="te-net-mode">
+                <input type="radio" name="te-net-mode" value="custom">
+                <span class="te-net-mode-body">
+                  <span class="te-net-mode-name">使用自定义代理</span>
+                  <span class="te-net-mode-desc">自己填写代理地址，适用于系统只配了自动脚本(PAC)或需要固定代理的情况。</span>
+                </span>
+              </label>
+            </div>
+
+            <div class="te-net-fields">
+              <div class="te-set-rows">
+                <label class="te-set-row te-net-custom-only">
+                  <span class="te-set-text">
+                    <span class="te-set-name">类型</span>
+                    <span class="te-set-hint">不确定就选 HTTP，Clash 等工具的混合端口通常是 HTTP</span>
+                  </span>
+                  <select class="te-select te-net-scheme">
+                    <option value="http">HTTP</option>
+                    <option value="https">HTTPS</option>
+                    <option value="socks5">SOCKS5</option>
+                  </select>
+                </label>
+                <label class="te-set-row te-net-custom-only">
+                  <span class="te-set-text">
+                    <span class="te-set-name">地址</span>
+                    <span class="te-set-hint">可直接粘贴完整代理链接，会自动拆分</span>
+                  </span>
+                  <input class="te-input te-net-host" type="text" placeholder="127.0.0.1" autocomplete="off" spellcheck="false">
+                </label>
+                <label class="te-set-row te-net-custom-only">
+                  <span class="te-set-text">
+                    <span class="te-set-name">端口</span>
+                    <span class="te-set-hint">代理工具里显示的端口号</span>
+                  </span>
+                  <input class="te-input te-net-port" type="text" inputmode="numeric" placeholder="7890" autocomplete="off">
+                </label>
+                <label class="te-set-row te-net-custom-only">
+                  <span class="te-set-text">
+                    <span class="te-set-name">账号</span>
+                    <span class="te-set-hint">代理不需要认证就留空</span>
+                  </span>
+                  <input class="te-input te-net-user" type="text" placeholder="可留空" autocomplete="off" spellcheck="false">
+                </label>
+                <label class="te-set-row te-net-custom-only">
+                  <span class="te-set-text">
+                    <span class="te-set-name">密码</span>
+                    <span class="te-set-hint">只填账号不填密码也支持</span>
+                  </span>
+                  <input class="te-input te-net-pass" type="password" placeholder="可留空" autocomplete="new-password">
+                </label>
+                <label class="te-set-row">
+                  <span class="te-set-text">
+                    <span class="te-set-name">不走代理的地址</span>
+                    <span class="te-set-hint">多个用英文逗号分隔；本机地址始终不走代理</span>
+                  </span>
+                  <input class="te-input te-net-noproxy" type="text" placeholder="*.corp.example.com" autocomplete="off" spellcheck="false">
+                </label>
+              </div>
+              <p class="te-net-note te-net-socks-hint">需要代理端支持 SOCKS5。如果你用的是 Clash 的 7890 混合端口，选 HTTP 即可。</p>
+              <p class="te-net-note te-net-credential-note">
+                账号密码以明文保存在本机 data/config.json，请勿在共享电脑上填写。
+                <span class="te-net-credential-state"></span>
+              </p>
+            </div>
+
+            <div class="te-net-verdict te-net-result"></div>
+
+            <div class="te-section-actions">
+              <button class="te-primary te-net-save" type="button">保存设置</button>
+              <button class="te-secondary te-net-test" type="button">测试连接</button>
+            </div>
+
+            <details class="te-net-advanced">
+              <summary>高级信息</summary>
+              <div class="te-status-list te-net-status"></div>
+            </details>
           </div>
         </section>
         <section class="te-settings-panel" data-settings-panel="maintenance">
@@ -2171,6 +2417,23 @@
     appUpdateStatus: settingsPane.querySelector(".te-app-update-status"),
     appUpdateSave: settingsPane.querySelector(".te-app-update-save"),
     appUpdateCheck: settingsPane.querySelector(".te-app-update-check"),
+    netPanel: settingsPane.querySelector('[data-settings-panel="network"]'),
+    netBadge: settingsPane.querySelector(".te-net-badge"),
+    netModeInputs: Array.from(settingsPane.querySelectorAll('input[name="te-net-mode"]')),
+    netFields: settingsPane.querySelector(".te-net-fields"),
+    netScheme: settingsPane.querySelector(".te-net-scheme"),
+    netHost: settingsPane.querySelector(".te-net-host"),
+    netPort: settingsPane.querySelector(".te-net-port"),
+    netUser: settingsPane.querySelector(".te-net-user"),
+    netPass: settingsPane.querySelector(".te-net-pass"),
+    netNoProxy: settingsPane.querySelector(".te-net-noproxy"),
+    netSocksHint: settingsPane.querySelector(".te-net-socks-hint"),
+    netCredentialNote: settingsPane.querySelector(".te-net-credential-note"),
+    netCredentialState: settingsPane.querySelector(".te-net-credential-state"),
+    netResult: settingsPane.querySelector(".te-net-result"),
+    netStatus: settingsPane.querySelector(".te-net-status"),
+    netSave: settingsPane.querySelector(".te-net-save"),
+    netTest: settingsPane.querySelector(".te-net-test"),
   };
   let settingsLoaded = false;
   let traeUpdateNoticeShown = false;
@@ -2352,6 +2615,262 @@
     } catch {
       // The generic wording stays; it is not worth an error in the panel footer.
     }
+  }
+
+  /* -----------------------------------------------------------------------
+   * Network proxy
+   *
+   * The saved username and password are never sent back to the panel — the
+   * daemon only reports whether a credential exists — so the two credential
+   * fields start empty and an untouched field means "keep what is stored".
+   * Clearing is therefore an explicit action, offered as a link in the warning
+   * line, and a save only sends empty strings when the user asked for that.
+   * --------------------------------------------------------------------- */
+
+  let netClearCredentials = false;
+
+  function currentNetMode() {
+    return settingsUi.netModeInputs.find((input) => input.checked)?.value ?? "off";
+  }
+
+  /**
+   * Shows only what the chosen mode needs: nothing for direct, the exception
+   * list for the system proxy, and every field for a custom proxy.
+   */
+  function applyNetVisibility() {
+    const mode = currentNetMode();
+    const custom = mode === "custom";
+    settingsUi.netFields.hidden = mode === "off";
+    for (const row of settingsUi.netPanel.querySelectorAll(".te-net-custom-only")) {
+      row.hidden = !custom;
+    }
+    settingsUi.netSocksHint.hidden = !custom || settingsUi.netScheme.value !== "socks5";
+    settingsUi.netCredentialNote.hidden = !custom;
+    for (const input of settingsUi.netModeInputs) {
+      input.closest(".te-net-mode")?.classList.toggle("selected", input.checked);
+    }
+    // The hairline belongs to the row below, so the first row still visible has
+    // to drop it once its predecessors are hidden.
+    let first = true;
+    for (const row of settingsUi.netPanel.querySelectorAll(".te-net-fields .te-set-row")) {
+      if (row.hidden) {
+        row.classList.remove("te-row-first");
+        continue;
+      }
+      row.classList.toggle("te-row-first", first);
+      first = false;
+    }
+  }
+
+  function setNetCredentialState(hasCredentials) {
+    settingsUi.netCredentialState.textContent = "";
+    if (!hasCredentials) return;
+    const label = document.createElement("span");
+    label.textContent = " 已保存账号密码。留空表示继续使用；";
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "te-net-clear";
+    clear.textContent = "清除已保存的账号密码";
+    clear.addEventListener("click", () => {
+      netClearCredentials = true;
+      settingsUi.netUser.value = "";
+      settingsUi.netPass.value = "";
+      setNetCredentialState(false);
+      showToast("保存后会清除已存账号密码");
+    });
+    settingsUi.netCredentialState.append(label, clear);
+  }
+
+  function netProxyFromForm() {
+    const proxy = {
+      mode: currentNetMode(),
+      scheme: settingsUi.netScheme.value,
+      host: settingsUi.netHost.value.trim(),
+      port: Number(settingsUi.netPort.value.trim()) || 0,
+      noProxy: settingsUi.netNoProxy.value.trim(),
+    };
+    const username = settingsUi.netUser.value.trim();
+    const password = settingsUi.netPass.value;
+    if (netClearCredentials) {
+      proxy.username = "";
+      proxy.password = "";
+      return proxy;
+    }
+    // Omitted means "keep the stored value" on the daemon side. The password is
+    // compared against "" rather than trimmed: a leading or trailing space can
+    // be part of it.
+    if (username) proxy.username = username;
+    if (password !== "") proxy.password = password;
+    return proxy;
+  }
+
+  function renderNetVerdict(conclusionText, severity) {
+    settingsUi.netResult.className = `te-net-verdict te-net-result show ${severity || "hint"}`;
+    settingsUi.netResult.textContent = conclusionText || "";
+  }
+
+  function formatNetTarget(state) {
+    if (!state?.host) return "无";
+    return `${state.scheme}://${state.host}:${state.port}`;
+  }
+
+  /**
+   * The probe host is already the line label, so this renders only the outcome.
+   *
+   * The daemon's own formatter is not reachable from here: the panel runs in the
+   * workbench renderer, which only ever sees the JSON the daemon sent.
+   */
+  function formatNetProbeLine(entry) {
+    if (Number.isInteger(entry?.httpStatus)) return `可达，HTTP ${entry.httpStatus}`;
+    if (entry?.dnsError) return `DNS 失败 → ${entry.dnsError}`;
+    if (entry?.error) return `连接失败 → ${entry.error}`;
+    return "未知状态";
+  }
+
+  function renderNetwork(network) {
+    const state = network?.state;
+    if (!state) return;
+    netClearCredentials = false;
+
+    const mode = ["off", "system", "custom"].includes(state.mode) ? state.mode : "off";
+    for (const input of settingsUi.netModeInputs) input.checked = input.value === mode;
+
+    if (mode === "custom") {
+      settingsUi.netScheme.value = state.scheme || "http";
+      settingsUi.netHost.value = state.host || "";
+      settingsUi.netPort.value = state.port ? String(state.port) : "";
+      settingsUi.netUser.value = "";
+      settingsUi.netPass.value = "";
+      settingsUi.netUser.placeholder = state.hasCredentials ? "已设置，留空则不修改" : "可留空";
+      settingsUi.netPass.placeholder = state.hasCredentials ? "已设置，留空则不修改" : "可留空";
+    }
+    // In system mode the reported host and port are the ones derived from the
+    // registry, not the user's own entries, so writing them into the hidden
+    // fields would overwrite what the custom mode should still remember.
+    settingsUi.netNoProxy.value = state.noProxy
+      ? // Loopback is always appended by the daemon; showing it back would only
+        // invite the user to delete an entry that is put back on save.
+        state.noProxy
+          .split(",")
+          .map((entry) => entry.trim())
+          .filter((entry) => entry && !["127.0.0.1", "localhost", "::1"].includes(entry))
+          .join(", ")
+      : "";
+    setNetCredentialState(Boolean(state.hasCredentials));
+    applyNetVisibility();
+
+    settingsUi.netBadge.className = `te-badge te-net-badge${state.active ? " ok" : ""}`;
+    settingsUi.netBadge.textContent =
+      state.source === "custom"
+        ? "自定义代理"
+        : state.source === "system"
+          ? state.active
+            ? "系统代理"
+            : "系统代理不可用"
+          : "未使用代理";
+
+    settingsUi.netStatus.textContent = "";
+    appendStatusLine(settingsUi.netStatus, "当前目标", formatNetTarget(state));
+    appendStatusLine(settingsUi.netStatus, "生效状态", state.active ? "已生效" : "未启用（直连）");
+    if (state.reasonText) appendStatusLine(settingsUi.netStatus, "原因", state.reasonText);
+    for (const note of state.notes ?? []) appendStatusLine(settingsUi.netStatus, "提示", note);
+    if (network.configPath) appendStatusLine(settingsUi.netStatus, "配置文件", network.configPath);
+    if (state.system) {
+      appendStatusLine(
+        settingsUi.netStatus,
+        "系统代理",
+        state.system.hasServer || state.system.hasAutoConfigUrl
+          ? `${state.system.enabled ? "已启用" : "未启用"}｜${
+              state.system.server ? `ProxyServer=${state.system.server}` : "无 ProxyServer"
+            }${state.system.hasAutoConfigUrl ? "｜仅配置了 PAC 自动脚本" : ""}`
+          : "未配置",
+      );
+    }
+    if (state.systemReadError) appendStatusLine(settingsUi.netStatus, "读取系统代理", state.systemReadError);
+  }
+
+  /**
+   * Splits a pasted `scheme://user:pass@host:port` into the separate fields.
+   *
+   * Tutorials hand out the whole string and a form that only accepts separate
+   * fields leaves the user stuck, so the address box accepts either.
+   */
+  function maybeSplitProxyUrl() {
+    const raw = settingsUi.netHost.value.trim();
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return;
+    let url;
+    try {
+      url = new URL(raw);
+    } catch {
+      showToast("这段代理链接无法识别，请检查后重试", true);
+      return;
+    }
+    const scheme = url.protocol.replace(":", "").toLowerCase();
+    if (scheme !== "http" && scheme !== "https" && scheme !== "socks5") {
+      showToast(`不支持的代理协议：${scheme}`, true);
+      return;
+    }
+    settingsUi.netScheme.value = scheme;
+    settingsUi.netHost.value = url.hostname;
+    settingsUi.netPort.value = url.port || "";
+    if (url.username) settingsUi.netUser.value = decodeURIComponent(url.username);
+    if (url.password) settingsUi.netPass.value = decodeURIComponent(url.password);
+    applyNetVisibility();
+    showToast("已从链接中填入代理信息");
+  }
+
+  async function saveNetworkConfig() {
+    settingsUi.netSave.disabled = true;
+    try {
+      const data = await api("/api/settings/network", {
+        method: "POST",
+        body: JSON.stringify({ proxy: netProxyFromForm() }),
+      });
+      renderNetwork(data.network);
+      renderNetVerdict(
+        data.network?.state?.active ? "已保存，立即生效。" : "已保存。当前没有启用代理。",
+        data.network?.state?.active ? "ok" : "hint",
+      );
+      showToast("已保存，立即生效");
+    } catch (error) {
+      showToast(error.message || String(error), true);
+    } finally {
+      settingsUi.netSave.disabled = false;
+    }
+  }
+
+  async function testNetworkConfig() {
+    settingsUi.netTest.disabled = true;
+    renderNetVerdict("正在测试连接…", "hint");
+    try {
+      const data = await api("/api/settings/network/test", {
+        method: "POST",
+        body: JSON.stringify({ proxy: netProxyFromForm() }),
+      });
+      renderNetVerdict(data.conclusionText, data.severity);
+      settingsUi.netStatus.textContent = "";
+      appendStatusLine(settingsUi.netStatus, "测试模式", currentNetModeLabel());
+      for (const entry of data.direct ?? []) {
+        appendStatusLine(settingsUi.netStatus, `直连 ${entry.host}`, formatNetProbeLine(entry));
+      }
+      for (const entry of data.proxied ?? []) {
+        appendStatusLine(settingsUi.netStatus, `代理 ${entry.host}`, formatNetProbeLine(entry));
+      }
+      if (data.proxyReason) {
+        appendStatusLine(settingsUi.netStatus, "代理不可用", data.proxyReason);
+      }
+      for (const note of data.proxyNotes ?? []) appendStatusLine(settingsUi.netStatus, "提示", note);
+      if (data.proxyError) appendStatusLine(settingsUi.netStatus, "错误", data.proxyError);
+    } catch (error) {
+      renderNetVerdict(error.message || String(error), "error");
+    } finally {
+      settingsUi.netTest.disabled = false;
+    }
+  }
+
+  function currentNetModeLabel() {
+    const mode = currentNetMode();
+    return mode === "custom" ? "自定义代理" : mode === "system" ? "系统代理" : "不使用代理";
   }
 
   /* -----------------------------------------------------------------------
@@ -2619,6 +3138,7 @@
       ]);
       renderTraeUpdate(data.traeUpdate);
       renderCheckin(data.checkin);
+      renderNetwork(data.network);
       // `/api/update` is the cached result, so the section reports the last check
       // without the settings tab ever reaching the network.
       renderAppUpdateConfig(data.appUpdate, update ?? appUpdateSnapshot);
@@ -3371,6 +3891,24 @@
   settingsUi.checkinAuto.addEventListener("change", () => {
     applyCheckinVisibility(settingsUi.checkinAuto.value === "on");
   });
+  settingsUi.netSave.addEventListener("click", () => {
+    saveNetworkConfig().catch(() => {});
+  });
+  settingsUi.netTest.addEventListener("click", () => {
+    testNetworkConfig().catch(() => {});
+  });
+  // Choosing a mode reshapes the form at once, so the fields a mode ignores are
+  // never left on screen looking editable.
+  for (const input of settingsUi.netModeInputs) {
+    input.addEventListener("change", () => {
+      // Switching away from a custom proxy drops a pending "clear credentials"
+      // request, which only ever applies to the credentials of that proxy.
+      netClearCredentials = false;
+      applyNetVisibility();
+    });
+  }
+  settingsUi.netScheme.addEventListener("change", () => applyNetVisibility());
+  settingsUi.netHost.addEventListener("input", () => maybeSplitProxyUrl());
   updateUi.check.addEventListener("click", () => {
     checkAppUpdate().catch(() => {});
   });

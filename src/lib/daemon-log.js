@@ -1,15 +1,16 @@
 /**
- * File logging for the daemon.
+ * File logging shared by the daemon and the service CLI.
  *
- * The daemon used to run with its output discarded, which meant a failure on a
- * user machine left no evidence at all. Writing to a file is only safe if no
- * credential can ever reach it, so every line passes through `redactLogLine`
- * first. The patterns cover the shapes this project actually handles: JWTs,
- * authorization headers, long hex tokens, and named secret assignments.
+ * A background process used to run with its output discarded, which meant a
+ * failure on a user machine left no evidence at all. Writing to a file is only
+ * safe if no credential can ever reach it, so every line passes through
+ * `redactLogLine` first. The patterns cover the shapes this project actually
+ * handles: JWTs, authorization headers, long hex tokens, and named secret
+ * assignments.
  *
- * Writes are synchronous on purpose. A daemon logs a handful of lines per sweep,
- * and the line that matters most is the one written immediately before a crash;
- * an asynchronous queue would lose exactly that line.
+ * Writes are synchronous on purpose. A process logs a handful of lines per
+ * sweep, and the line that matters most is the one written immediately before a
+ * crash; an asynchronous queue would lose exactly that line.
  */
 import fs from "node:fs";
 import path from "node:path";

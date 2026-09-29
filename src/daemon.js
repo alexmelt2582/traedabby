@@ -25,6 +25,7 @@ import {
   loadAppConfig,
   normalizeAppUpdate,
   normalizeCheckin,
+  normalizeProxy,
   normalizeTraeUpdate,
   saveAppConfig,
 } from "./lib/app-config.js";
@@ -39,9 +40,18 @@ import { detectSeaApi, loadInjectSource, renderInjectScript } from "./lib/inject
 import { readJsonFile, readTextFile, writeTextAtomic } from "./lib/json-file.js";
 import { serviceSpec } from "./lib/launch-spec.js";
 import {
+  STATIC_HOSTS,
+  describeProxyTestVerdict,
+  probeHosts,
   stripProxyEnv,
 } from "./lib/net-diagnostics.js";
+import {
+  applyProxyConfig,
+  buildCandidateDispatcher,
+  describeActive,
+} from "./lib/proxy-runtime.js";
 import { DAEMON_LOG_PATH } from "./lib/runtime-paths.js";
+import { enableSystemCACertificates, formatCAStatus } from "./lib/system-ca.js";
 import {
   TRAE_UPDATE_MODE_SUPPRESSED,
   applyTraeUpdateSetting,
@@ -1650,6 +1660,98 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
         startupNotice: traeUpdateStartupNotice,
         startupError: traeUpdateStartupError,
       },
+      // Never the username or password: `describeActive` reports `hasCredentials`
+      // as a boolean so the panel can say "已设置账号" without the secret ever
+      // leaving this process.
+      network: { state: describeActive(), configPath: configPath(DATA_DIR) },
+    });
+    return;
+  }
+
+  /**
+   * Saves the proxy configuration and puts it into effect immediately.
+   *
+   * Validation runs before anything is written, so a rejected value leaves both
+   * the file and the running dispatcher exactly as they were. There is no
+   * `restartRequired` in the reply: the dispatcher is swapped in place.
+   */
+  if (request.method === "POST" && pathname === "/api/settings/network") {
+    const body = await readRequestBody(request);
+    const current = await loadAppConfig(DATA_DIR);
+    let proxy;
+    try {
+      // The panel never receives the saved username or password, so an omitted
+      // credential field means "keep what is stored" — otherwise saving after
+      // changing only the port would silently wipe a working login. Clearing is
+      // explicit: the panel sends empty strings.
+      const submitted = { ...(body?.proxy ?? {}) };
+      if (submitted.username === undefined) submitted.username = current.proxy.username;
+      if (submitted.password === undefined) submitted.password = current.proxy.password;
+      proxy = normalizeProxy(submitted);
+    } catch (error) {
+      jsonResponse(response, 400, { ok: false, error: error.message || String(error) });
+      return;
+    }
+    await saveAppConfig(DATA_DIR, { proxy });
+    const state = await applyProxyConfig({ proxy });
+    console.log(
+      `[settings] proxy mode=${state.source} active=${state.active}` +
+        `${state.host ? ` ${state.scheme}://${state.host}:${state.port}` : ""}` +
+        `${state.reason ? ` reason=${state.reason}` : ""}`,
+    );
+    jsonResponse(response, 200, {
+      ok: true,
+      network: { state, configPath: configPath(DATA_DIR) },
+    });
+    return;
+  }
+
+  /**
+   * Tests the submitted proxy without saving it: one direct run and one through
+   * a candidate dispatcher, so the panel can tell "the proxy is wrong" apart
+   * from "the network is down".
+   */
+  if (request.method === "POST" && pathname === "/api/settings/network/test") {
+    const body = await readRequestBody(request);
+    let proxy;
+    try {
+      proxy = normalizeProxy(body?.proxy);
+    } catch (error) {
+      jsonResponse(response, 400, { ok: false, error: error.message || String(error) });
+      return;
+    }
+    const hosts =
+      Array.isArray(body?.hosts) && body.hosts.length
+        ? body.hosts.filter((host) => typeof host === "string" && host.trim()).slice(0, 8)
+        : STATIC_HOSTS;
+
+    const direct = await probeHosts(hosts, { timeoutMs: 10000 });
+    let proxied = null;
+    let candidate = { resolved: { reason: null, notes: [], target: null }, error: null };
+    if (proxy.mode !== "off") {
+      candidate = await buildCandidateDispatcher(proxy);
+      if (candidate.dispatcher) {
+        proxied = await probeHosts(hosts, { timeoutMs: 12000, dispatcher: candidate.dispatcher });
+      }
+    }
+    const verdict = describeProxyTestVerdict({ direct, proxied });
+    if (candidate.dispatcher && typeof candidate.dispatcher.close === "function") {
+      Promise.resolve(candidate.dispatcher.close()).catch(() => {});
+    }
+    if (candidate.error) {
+      console.error(`[settings] proxy test could not build a dispatcher: ${candidate.error}`);
+    }
+    jsonResponse(response, 200, {
+      ok: true,
+      hosts,
+      direct,
+      proxied,
+      proxyError: candidate.error,
+      proxyReason: candidate.resolved?.reason ?? null,
+      proxyNotes: candidate.resolved?.notes ?? [],
+      conclusion: verdict.conclusion,
+      conclusionText: verdict.text,
+      severity: verdict.severity,
     });
     return;
   }
@@ -1770,6 +1872,22 @@ function installLogging() {
 async function main() {
   await fs.mkdir(DATA_DIR, { recursive: true });
   installLogging();
+
+  /**
+   * Network setup comes before anything that can reach out, and the order
+   * matters: the system certificate store is merged first, then the dispatcher
+   * is resolved. A failure here is logged with its reason rather than being
+   * allowed to look like a working direct connection.
+   */
+  const caStatus = enableSystemCACertificates();
+  console.log(`[net] 系统证书：${formatCAStatus(caStatus)}`);
+  const appliedNetwork = await applyProxyConfig(await loadAppConfig(DATA_DIR));
+  console.log(
+    `[net] 代理 source=${appliedNetwork.source} active=${appliedNetwork.active}` +
+      `${appliedNetwork.host ? ` ${appliedNetwork.scheme}://${appliedNetwork.host}:${appliedNetwork.port}` : ""}` +
+      `${appliedNetwork.reason ? ` reason=${appliedNetwork.reason}` : ""}`,
+  );
+  if (appliedNetwork.notes?.length) console.warn(`[net] ${appliedNetwork.notes.join(" ")}`);
 
   const purgedTransactionDirectory = await purgeLegacyTransactionDirectory(
     LEGACY_TRANSACTION_DIR,

@@ -1,5 +1,18 @@
-import { describeErrorChain, redactUrl } from "./net-diagnostics.js";
+import { fetch as undiciFetch } from "undici";
 
+import { describeErrorChain, redactUrl } from "./net-diagnostics.js";
+import { getDispatcherFor } from "./proxy-runtime.js";
+
+/**
+ * Every outbound request in this daemon goes through here, which is what makes a
+ * single dispatcher enough to route the whole program.
+ *
+ * The npm `undici` package is used rather than Node's global `fetch`: a
+ * dispatcher built by npm undici cannot be handed to the built-in fetch, so the
+ * two have to come from the same copy. Loopback callers keep the global fetch
+ * (see `launcher.js`, `watchdog.js` and the injected panel) and never touch a
+ * proxy.
+ */
 export async function requestJson(
   url,
   {
@@ -7,12 +20,14 @@ export async function requestJson(
     headers = {},
     body,
     timeoutMs = 20000,
+    dispatcher,
   } = {},
 ) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const activeDispatcher = dispatcher === undefined ? getDispatcherFor(url) : dispatcher;
   try {
-    const response = await fetch(url, {
+    const response = await undiciFetch(url, {
       method,
       headers: {
         accept: "application/json",
@@ -22,6 +37,7 @@ export async function requestJson(
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
       redirect: "follow",
+      ...(activeDispatcher ? { dispatcher: activeDispatcher } : {}),
     });
     const text = await response.text();
     let json = null;
