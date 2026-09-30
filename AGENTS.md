@@ -194,9 +194,36 @@ TRAE 自身文件它唯一允许写入的是用户级 `User/settings.json`，
 - 传输失败必须报告其 `cause` 链。Node 把真实原因（`ECONNREFUSED`、`ENOTFOUND`、
   证书错误）藏在 `error.cause` 里，因此裸的 `fetch failed` 不是可接受的消息。
 - 进入消息或日志的 URL 必须走 `redactUrl`：签到状态查询携带 `did`，它是个账号标识。
-- 本版本没有代理配置。能触网的子进程以 `stripProxyEnv` 生成，使继承的代理环境
-  控制无法静默重新引入代理路径。
-- `service net` 只执行直接的 DNS/HTTPS 探测。它不得读取或修改 Windows 代理设置。
+- 代理不再走子进程环境变量那一套。出网唯一咽喉是 `src/lib/http.js` 的 `requestJson`，
+  它按目标 URL 向 `src/lib/proxy-runtime.js` 取 dispatcher；指向 `127.0.0.1` 的请求
+  以及例外地址始终直连。
+- `stripProxyEnv` 仍然保留：继承来的 `HTTP_PROXY` 会是一次面板既解释不了、也关不掉的
+  代理决定，因此能触网的子进程仍必须剥离它。
+- `service net` 只读取注册表以获知系统代理，绝不写入或修改 Windows 代理设置。
+
+## 代理不变式
+
+- `config.proxy` 是三态配置：`off`（默认）/`system`/`custom`，没有 `env` 模式。
+  只有 `custom` 才要求地址与端口。
+- dispatcher 由 `src/lib/proxy-runtime.js` 持有并随保存热替换，保存即生效，不重启
+  守护进程。构建 dispatcher 失败绝不静默退回直连：保留上一个可用 dispatcher，并在
+  `reason`/`notes` 里说明原因，因为"我以为走了代理，其实是直连"要到泄漏才能发现。
+- 凭据只作为结构化 options 传给 undici（SOCKS5 走 `{username, password}`，HTTP/HTTPS
+  走 `proxy-authorization` 头），绝不拼进代理 URL。
+- 按用户要求，代理账号密码明文存放在本机 `data/config.json`。它们绝不进入日志、渲染
+  脚本或 `GET /api/settings` 的 `network` 快照——那里只有 `hasCredentials` 布尔。
+- 系统代理快照来自注册表，进入面板前必须脱敏：`ProxyServer` 里嵌的 `user:pass@`
+  由 `splitCredentials` 剥离成结构化字段，其余出现位置由 `redactProxyUrl` 处理。
+- 例外地址（`noProxy`）由 `getDispatcherFor` 按主机名判断，恒含回环地址。undici 的
+  `ProxyAgent` 没有 `noProxy` 选项，这层判断只能由本项目自己做。
+- HTTP 代理默认走 CONNECT 隧道（undici 的 `proxyTunnel` 默认 true）；对 HTTPS 目标
+  这是唯一正确形态。
+- 信任内网证书只通过 `src/lib/system-ca.js` 把 Windows 证书存储里的根证书并入默认
+  信任列表；绝不使用 `rejectUnauthorized: false` 或 `NODE_TLS_REJECT_UNAUTHORIZED=0`。
+- 面板的「测试连接」与 `service net` 共用同一条 dispatcher 判定：先直连探测、再走代理
+  探测，最后只给一条结论。
+- 命令行 `configure --proxy-*` 只写文件：面板保存立即生效，命令行写入需要重启守护进程
+  后才会生效。
 
 ## TRAE 设置不变式
 

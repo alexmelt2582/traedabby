@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  classifyProbeFailure,
   describeErrorChain,
+  describeProxyTestVerdict,
   formatProbeLine,
   probeSucceeded,
   redactQueryValues,
   redactUrl,
   stripProxyEnv,
+  summarizeProbeFailure,
 } from "../src/lib/net-diagnostics.js";
 
 function withCause(message, cause) {
@@ -71,4 +74,81 @@ test("probe formatting distinguishes reachable and failed hosts", () => {
   assert.match(line, /可达，HTTP 200/);
   assert.match(line, /\+1 个/);
   assert.match(formatProbeLine({ host: "a.cn", dnsError: "ENOTFOUND" }), /DNS 失败/);
+});
+
+const probed = (host, error) => ({ host, error, httpStatus: null, dnsError: null, addresses: [] });
+const arrived = (host, status = 200) => ({ host, error: null, httpStatus: status, dnsError: null, addresses: [] });
+
+test("failure classification prefers the most specific cause, not the first seen", () => {
+  assert.equal(classifyProbeFailure("fetch failed → UNABLE_TO_GET_ISSUER_CERT_LOCALLY"), "certificate");
+  // A certificate rejection proves something answered, so it outranks the
+  // refused connection the same chain also mentions.
+  assert.equal(
+    classifyProbeFailure("fetch failed → connect ECONNREFUSED 1.2.3.4:7890 → UNABLE_TO_GET_ISSUER_CERT_LOCALLY"),
+    "certificate",
+  );
+  assert.equal(classifyProbeFailure("407 Proxy Authentication Required"), "auth");
+  assert.equal(classifyProbeFailure("SOCKS5 authentication failed"), "auth");
+  assert.equal(classifyProbeFailure("fetch failed → connect ECONNREFUSED 127.0.0.1:7890"), "refused");
+  assert.equal(classifyProbeFailure("getaddrinfo ENOTFOUND proxy.corp"), "dns");
+  assert.equal(classifyProbeFailure("Headers Timeout Error"), "timeout");
+  assert.equal(classifyProbeFailure("something else entirely"), "other");
+  assert.equal(classifyProbeFailure(""), null);
+  assert.equal(classifyProbeFailure(null), null);
+
+  assert.equal(
+    summarizeProbeFailure([probed("a.cn", "ENOTFOUND"), probed("b.cn", "UNABLE_TO_VERIFY_LEAF_SIGNATURE")]),
+    "certificate",
+  );
+  assert.equal(summarizeProbeFailure([arrived("a.cn")]), null);
+});
+
+test("the test-connection verdict names the one thing the user should do next", () => {
+  // No proxy run happened, and direct works: say so plainly.
+  const direct = describeProxyTestVerdict({ direct: [arrived("api.trae.cn")], proxied: null });
+  assert.equal(direct.conclusion, "direct");
+  assert.equal(direct.severity, "ok");
+
+  // Direct fails on an intranet: the sentence must point at the proxy, not at DNS.
+  const intranet = describeProxyTestVerdict({
+    direct: [probed("api.trae.cn", "connect ETIMEDOUT 10.0.0.1:443")],
+    proxied: null,
+  });
+  assert.equal(intranet.conclusion, "timeout");
+  assert.match(intranet.text, /走代理/);
+
+  const both = describeProxyTestVerdict({
+    direct: [arrived("api.trae.cn")],
+    proxied: [arrived("api.trae.cn")],
+  });
+  assert.equal(both.conclusion, "both");
+  assert.equal(both.severity, "ok");
+
+  // The proxy is the fix: direct failed, proxied answered.
+  const recommended = describeProxyTestVerdict({
+    direct: [probed("api.trae.cn", "connect ECONNREFUSED 10.0.0.1:443")],
+    proxied: [arrived("api.trae.cn")],
+  });
+  assert.equal(recommended.conclusion, "proxy");
+  assert.equal(recommended.severity, "ok");
+  assert.match(recommended.text, /建议保存并启用/);
+
+  // Direct works but the proxy does not: the hint must be about the proxy.
+  const badProxy = describeProxyTestVerdict({
+    direct: [arrived("api.trae.cn")],
+    proxied: [probed("api.trae.cn", "connect ECONNREFUSED 127.0.0.1:7890")],
+  });
+  assert.equal(badProxy.conclusion, "refused");
+  assert.equal(badProxy.severity, "hint");
+  assert.match(badProxy.text, /代理已启动/);
+
+  // Both fail on a certificate: a hint would send the user to re-check an
+  // address that is already correct, so this is reported as an error.
+  const certificate = describeProxyTestVerdict({
+    direct: [probed("api.trae.cn", "UNABLE_TO_GET_ISSUER_CERT_LOCALLY")],
+    proxied: [probed("api.trae.cn", "UNABLE_TO_GET_ISSUER_CERT_LOCALLY")],
+  });
+  assert.equal(certificate.conclusion, "certificate");
+  assert.equal(certificate.severity, "error");
+  assert.match(certificate.text, /证书/);
 });

@@ -14,6 +14,7 @@ export const DATA_DIR = process.env.TRAE_ENHANCER_DATA_DIR || DEFAULT_DATA_DIR;
 export const LOG_DIR = path.join(APP_ROOT, "logs");
 export const WATCHDOG_LOG_PATH = path.join(LOG_DIR, "watchdog.log");
 export const DAEMON_LOG_PATH = path.join(LOG_DIR, "daemon.log");
+export const SERVICE_LOG_PATH = path.join(LOG_DIR, "service.log");
 export const WATCHDOG_PID_PATH = path.join(DATA_DIR, "watchdog.pid");
 export const TRAY_PID_PATH = path.join(DATA_DIR, "tray.pid");
 export const DIST_DIR = path.join(APP_ROOT, "dist");

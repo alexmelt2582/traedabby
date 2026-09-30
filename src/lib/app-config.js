@@ -6,11 +6,14 @@
  *
  * Validation is strict and rejects malformed values instead of silently falling
  * back, because a wrong TRAE path would otherwise only surface much later as an
- * unexplained failure during a switch.
+ * unexplained failure during a switch. Values written by an older version of
+ * this app are the one exception — they are migrated, because a leftover setting
+ * must never make the whole file unreadable.
  */
 import path from "node:path";
 
 import { readJsonFile, writeJsonAtomic } from "./json-file.js";
+import { PROXY_MODES, PROXY_SCHEMES } from "./system-proxy.js";
 import { TRAE_UPDATE_MODES } from "./trae-settings.js";
 
 export const CONFIG_FILE_NAME = "config.json";
@@ -138,6 +141,181 @@ export function normalizeAppUpdate(raw) {
   return { autoCheck: normalizeCheckinFlag(raw.autoCheck, APP_UPDATE_DEFAULTS.autoCheck) };
 }
 
+/**
+ * Proxy configuration.
+ *
+ * Three modes only: direct, follow the Windows proxy, or a fixed address. The
+ * old `env` mode is gone — Node cannot reach HTTPS through a SOCKS value in the
+ * environment, so promising that mode would be a promise the runtime cannot
+ * keep. Legacy keys (`useEnvProxy`, `url`) are simply not read, which is what
+ * "discard" means here: nothing is migrated and nothing is silently honoured.
+ *
+ * The port is only required for `custom`. Switching to `off` keeps whatever the
+ * user typed so switching back restores it, and an empty port is normal then.
+ */
+export const PROXY_DEFAULTS = {
+  mode: "off",
+  scheme: "http",
+  host: "",
+  port: 0,
+  username: "",
+  password: "",
+  noProxy: "",
+};
+
+function normalizeProxyText(value, field) {
+  if (value === null || value === undefined) return "";
+  if (typeof value !== "string" && typeof value !== "number") {
+    throw new Error(`config.proxy.${field} must be a string`);
+  }
+  const text = String(value);
+  if (text.includes("\0")) throw new Error(`config.proxy.${field} contains a null byte`);
+  return text.trim();
+}
+
+function normalizeProxyPort(value) {
+  if (value === null || value === undefined || value === "") return 0;
+  const numeric = typeof value === "string" ? Number(value.trim()) : value;
+  return Number.isInteger(numeric) ? numeric : Number.NaN;
+}
+
+/**
+ * A credential, kept exactly as typed.
+ *
+ * The password is deliberately not trimmed: a leading or trailing space can be
+ * part of it, and a value that works in the panel must keep working here. The
+ * username is trimmed like every other text field, matching what the panel sends.
+ */
+function normalizeProxySecret(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value !== "string" && typeof value !== "number") {
+    throw new Error("config.proxy.password must be a string");
+  }
+  const text = String(value);
+  if (text.includes("\0")) throw new Error("config.proxy.password contains a null byte");
+  return text;
+}
+
+export function normalizeNoProxy(value) {
+  const text = normalizeProxyText(value, "noProxy");
+  if (!text) return "";
+  const entries = [];
+  for (const part of text.split(",")) {
+    const entry = part.trim();
+    if (entry && !entries.includes(entry)) entries.push(entry);
+  }
+  return entries.join(",");
+}
+
+export function normalizeProxy(raw) {
+  if (raw === null || raw === undefined) return { ...PROXY_DEFAULTS };
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("config.proxy must be a JSON object");
+  }
+
+  const mode =
+    raw.mode === null || raw.mode === undefined || String(raw.mode).trim() === ""
+      ? "off"
+      : String(raw.mode).trim();
+  if (!PROXY_MODES.includes(mode)) {
+    throw new Error(`config.proxy.mode 必须是 ${PROXY_MODES.join(" / ")} 之一`);
+  }
+
+  const scheme = normalizeProxyText(raw.scheme, "scheme").toLowerCase() || "http";
+  if (!PROXY_SCHEMES.includes(scheme)) {
+    throw new Error(`config.proxy.scheme 必须是 ${PROXY_SCHEMES.join(" / ")} 之一`);
+  }
+
+  const host = normalizeProxyText(raw.host, "host");
+  const port = normalizeProxyPort(raw.port);
+  if (mode === "custom") {
+    if (!host) throw new Error("使用自定义代理时必须填写代理地址");
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new Error("自定义代理的端口必须是 1-65535 之间的整数");
+    }
+  } else if (!(Number.isInteger(port) && port >= 0 && port <= 65535)) {
+    throw new Error("config.proxy.port 必须是 0-65535 之间的整数");
+  }
+
+  return {
+    mode,
+    scheme,
+    host,
+    port,
+    username: normalizeProxyText(raw.username, "username"),
+    password: normalizeProxySecret(raw.password),
+    noProxy: normalizeNoProxy(raw.noProxy),
+  };
+}
+
+/**
+ * The `proxy.mode` values written before this version, and what each became.
+ *
+ * `manual` stored one URL and was this project's name for what is now `custom`.
+ * `env` read the proxy out of `HTTP_PROXY`/`HTTPS_PROXY`, which this version no
+ * longer supports at all: it maps to `system`, the surviving way of saying "use
+ * whatever this machine is configured with". On a machine with no system proxy
+ * that resolves to nothing, so it behaves exactly like `off`.
+ */
+const LEGACY_PROXY_MODES = new Map([
+  ["off", "off"],
+  ["system", "system"],
+  ["manual", "custom"],
+  ["env", "system"],
+]);
+
+/** Splits the one URL a legacy `manual` entry stored into its parts. */
+function legacyProxyTarget(url) {
+  const text = typeof url === "string" ? url.trim() : "";
+  if (!text) return null;
+  let parsed;
+  try {
+    parsed = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : `http://${text}`);
+  } catch {
+    return null;
+  }
+  const scheme = parsed.protocol.replace(/:$/, "").toLowerCase();
+  if (!PROXY_SCHEMES.includes(scheme) || !parsed.hostname) return null;
+  return { scheme, host: parsed.hostname, port: Number(parsed.port) || (scheme === "https" ? 443 : 80) };
+}
+
+/**
+ * Reads the `proxy` block that came from disk.
+ *
+ * A mode written by an older version must never make the whole file unreadable.
+ * It did: a config that still said `manual` made `normalizeConfig` throw, so
+ * `loadAppConfig` failed and `locate`, `configure` and the daemon all died with
+ * exit code 1 — a leftover proxy setting bricked the entire installation. Stored
+ * values are therefore migrated rather than rejected; only the panel and the
+ * CLI, where a human is waiting to be told what is wrong, go through the strict
+ * `normalizeProxy`.
+ */
+export function normalizeStoredProxy(rawProxy, legacyUseEnvProxy) {
+  if (rawProxy === null || rawProxy === undefined) {
+    return { ...PROXY_DEFAULTS, mode: legacyUseEnvProxy === true ? "system" : "off" };
+  }
+  if (typeof rawProxy !== "object" || Array.isArray(rawProxy)) {
+    return { ...PROXY_DEFAULTS };
+  }
+
+  const declared = typeof rawProxy.mode === "string" ? rawProxy.mode.trim().toLowerCase() : "";
+  if (PROXY_MODES.includes(declared)) return normalizeProxy(rawProxy);
+
+  const mode = LEGACY_PROXY_MODES.get(declared) ?? (legacyUseEnvProxy === true ? "system" : "off");
+  const target = mode === "custom" ? legacyProxyTarget(rawProxy.url) : null;
+  // A `manual` entry whose URL cannot be read back is not a proxy we can point
+  // at; an empty custom address would be unsavable and would route nothing.
+  if (mode === "custom" && !target) return { ...PROXY_DEFAULTS };
+
+  return normalizeProxy({
+    mode,
+    scheme: target?.scheme ?? PROXY_DEFAULTS.scheme,
+    host: target?.host ?? "",
+    port: target?.port ?? PROXY_DEFAULTS.port,
+    noProxy: typeof rawProxy.noProxy === "string" ? rawProxy.noProxy : "",
+  });
+}
+
 export function normalizeConfig(raw) {
   if (raw === null || raw === undefined) {
     return {
@@ -145,6 +323,7 @@ export function normalizeConfig(raw) {
       traeUpdate: { suppress: true, previousMode: null },
       checkin: { ...CHECKIN_DEFAULTS },
       appUpdate: { ...APP_UPDATE_DEFAULTS },
+      proxy: { ...PROXY_DEFAULTS },
     };
   }
   if (typeof raw !== "object" || Array.isArray(raw)) {
@@ -155,6 +334,7 @@ export function normalizeConfig(raw) {
     traeUpdate: normalizeTraeUpdate(raw.traeUpdate),
     checkin: normalizeCheckin(raw.checkin),
     appUpdate: normalizeAppUpdate(raw.appUpdate),
+    proxy: normalizeStoredProxy(raw.proxy, raw.useEnvProxy),
   };
 }
 

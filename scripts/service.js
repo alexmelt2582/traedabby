@@ -11,8 +11,11 @@
  *   restart    stop, then start the background service
  *   status     Print what is currently running
  *   locate     Show where TRAE was found, and every location that was probed
- *   configure  Save or clear the TRAE executable path
- *   net        Probe the required hosts directly
+ *   configure  Save or clear the TRAE executable path, or write proxy settings
+ *              (`--proxy-*`); writes the file only, so a running daemon has to
+ *              be restarted whereas saving from the panel takes effect at once
+ *   net        Probe the required hosts directly and, when a proxy is active,
+ *              through that same dispatcher
  *   install    Register the logon autostart entry (background service only)
  *   uninstall  Remove the logon autostart entry
  *   tray       Start the tray icon host
@@ -56,6 +59,7 @@ import {
   startupShortcutPath,
 } from "../src/lib/autostart.js";
 import {
+  normalizeProxy,
   normalizeTraeExe,
   configPath,
   loadAppConfig,
@@ -70,11 +74,14 @@ import {
 } from "../src/lib/trae-locate.js";
 import {
   STATIC_HOSTS,
+  describeProxyTestVerdict,
   formatProbeLine,
+  probeHost,
   probeHosts,
-  probeSucceeded,
   stripProxyEnv,
 } from "../src/lib/net-diagnostics.js";
+import { applyProxyConfig, getDispatcherFor } from "../src/lib/proxy-runtime.js";
+import { PROXY_MODE_LABELS } from "../src/lib/system-proxy.js";
 import {
   flagValue,
   parseServiceArgs,
@@ -87,11 +94,13 @@ import {
   DAEMON_LOG_PATH,
   HOST,
   LOG_DIR,
+  SERVICE_LOG_PATH,
   TRAY_PID_PATH,
   UI_PORT,
   WATCHDOG_LOG_PATH,
   WATCHDOG_PID_PATH,
 } from "../src/lib/runtime-paths.js";
+import { createDaemonLogger } from "../src/lib/daemon-log.js";
 import {
   isProcessAlive,
   isManagedProcessImage,
@@ -621,24 +630,36 @@ function parseHostArguments(args) {
   return hosts;
 }
 
-function formatNetworkReport({ hosts, direct }) {
+function formatNetworkReport({ hosts, direct, proxied, verdict, state }) {
   const lines = [];
   lines.push(`配置文件        : ${configPath(DATA_DIR)}`);
+  lines.push(`代理模式        : ${PROXY_MODE_LABELS[state?.mode] ?? state?.mode ?? "off"}`);
   lines.push(`直连探测（${hosts.join(", ")}）:`);
   for (const result of direct) lines.push(`  ${formatProbeLine(result)}`);
+  if (proxied) {
+    lines.push("");
+    lines.push(`走代理探测（${state.scheme}://${state.host}:${state.port}）:`);
+    for (const result of proxied) lines.push(`  ${formatProbeLine(result)}`);
+  }
   lines.push("");
-  lines.push(
-    direct.length > 0 && direct.every(probeSucceeded)
-      ? "结论: 直连可以正常访问。"
-      : "结论: 有地址无法直连，请把上面的错误码发给排查方。",
-  );
+  lines.push(`结论: ${verdict.text}`);
   return lines.join("\n");
 }
 
 async function commandNet(args = []) {
   const hosts = [...new Set([...STATIC_HOSTS, ...parseHostArguments(args)])];
+  // The live dispatcher is built from the same configuration and with the same
+  // rules the daemon uses, so this report describes the path requests actually
+  // take rather than a bare direct connection that only the CLI can make.
+  const state = await applyProxyConfig(await loadAppConfig(DATA_DIR));
   const direct = await probeHosts(hosts);
-  const reachable = direct.length > 0 && direct.every(probeSucceeded);
+  const proxied = [];
+  if (state.active) {
+    for (const host of hosts) {
+      proxied.push(await probeHost(host, { dispatcher: getDispatcherFor(`https://${host}/`) }));
+    }
+  }
+  const verdict = describeProxyTestVerdict({ direct, proxied: proxied.length ? proxied : null });
 
   if (args.includes("--json")) {
     log(
@@ -646,8 +667,20 @@ async function commandNet(args = []) {
         {
           hosts,
           direct,
-          conclusion: reachable ? "direct" : "none",
-          severity: reachable ? "ok" : "error",
+          proxied: proxied.length ? proxied : null,
+          proxy: {
+            mode: state.mode,
+            source: state.source,
+            active: state.active,
+            scheme: state.scheme,
+            host: state.host,
+            port: state.port,
+            reason: state.reason,
+            notes: state.notes,
+          },
+          conclusion: verdict.conclusion,
+          severity: verdict.severity,
+          conclusionText: verdict.text,
         },
         null,
         2,
@@ -656,7 +689,63 @@ async function commandNet(args = []) {
     return;
   }
 
-  log(formatNetworkReport({ hosts, direct }));
+  log(formatNetworkReport({ hosts, direct, proxied: proxied.length ? proxied : null, verdict, state }));
+}
+
+/**
+ * The proxy flags accepted by `configure`.
+ *
+ * Only the file is written. The daemon reads its configuration at start-up and
+ * on every panel save, so a value written here needs a restart to be picked up —
+ * saying so is the whole point, because the panel's own save is immediate and
+ * the two paths would otherwise look identical.
+ */
+const PROXY_FLAGS = [
+  ["--proxy-mode", "mode"],
+  ["--proxy-scheme", "scheme"],
+  ["--proxy-host", "host"],
+  ["--proxy-port", "port"],
+  ["--proxy-user", "username"],
+  ["--proxy-pass", "password"],
+  ["--proxy-noproxy", "noProxy"],
+];
+
+/** Returns true when proxy flags were present and handled. */
+async function configureProxy(args) {
+  const touched = PROXY_FLAGS.filter(([flag]) => flagValue(args, flag) !== null);
+  if (touched.length === 0) return false;
+
+  if (args.includes("--proxy-pass")) {
+    log("提示: 命令行里的密码会留在命令历史中，建议改用面板的「网络」设置页填写。");
+  }
+
+  const current = await loadAppConfig(DATA_DIR);
+  const submitted = { ...current.proxy };
+  for (const [flag, key] of touched) {
+    const value = flagValue(args, flag);
+    submitted[key] = key === "port" ? Number(value) : value;
+  }
+
+  let proxy;
+  try {
+    proxy = normalizeProxy(submitted);
+  } catch (error) {
+    log(`代理配置无效: ${error.message || String(error)}`);
+    log("用法: configure --proxy-mode off|system|custom [--proxy-noproxy \"*.corp.example.com\"]");
+    log("      configure --proxy-mode custom --proxy-scheme http|https|socks5 --proxy-host 127.0.0.1 --proxy-port 7890");
+    log("              [--proxy-user <账号> --proxy-pass <密码>]");
+    process.exitCode = 2;
+    return true;
+  }
+
+  await saveAppConfig(DATA_DIR, { proxy });
+  log(
+    `已保存代理配置: ${PROXY_MODE_LABELS[proxy.mode]}` +
+      `${proxy.mode === "custom" ? ` ${proxy.scheme}://${proxy.host}:${proxy.port}` : ""}`,
+  );
+  log(`配置文件        : ${configPath(DATA_DIR)}`);
+  log("面板里保存会立即生效；命令行写入的配置需要重启守护进程后才会生效。");
+  return true;
 }
 
 async function commandConfigure(args = []) {
@@ -666,10 +755,13 @@ async function commandConfigure(args = []) {
     return;
   }
 
+  if (await configureProxy(args)) return;
+
   const raw = flagValue(args, "--trae-exe");
   if (!raw) {
     log('用法: configure --trae-exe "D:\\路径\\TRAE SOLO CN.exe"');
     log("      configure --clear");
+    log("      configure --proxy-mode off|system|custom [--proxy-scheme ...] [--proxy-host ...] [--proxy-port ...]");
     process.exitCode = 2;
     return;
   }
@@ -749,8 +841,29 @@ async function main() {
   if (exitIsInteractive) await waitForEnter();
 }
 
+/**
+ * The installer only ever sees an exit code, so the failure has to leave a trace
+ * on disk or the report is unfalsifiable. The whole chain matters: Node hides
+ * the real reason for a transport failure in `cause`, and the bare message of a
+ * config rejection does not say where it was thrown from.
+ */
+function describeErrorChain(error) {
+  const parts = [];
+  const seen = new Set();
+  let current = error;
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current);
+    parts.push(current.stack || current.message);
+    current = current.cause;
+  }
+  return parts.length ? parts.join("\n  caused by: ") : String(error);
+}
+
+const serviceLogger = createDaemonLogger({ logPath: SERVICE_LOG_PATH, mirror: false });
+
 main().catch(async (error) => {
   console.error(error instanceof Error ? error.message : error);
   process.exitCode = 1;
+  serviceLogger.error(describeErrorChain(error));
   if (exitIsInteractive) await waitForEnter();
 });
