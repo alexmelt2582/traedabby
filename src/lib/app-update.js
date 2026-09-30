@@ -7,14 +7,21 @@
  * only reads a public release page.
  *
  * The release payload is remote content, so it is normalised down to the handful
- * of fields the panel may render, and the download URL is required to point at
- * github.com. A tampered or unexpected payload must not be able to hand the
- * daemon an arbitrary URL to open.
+ * of fields the panel may render. The one address that matters is the installer
+ * asset: it is what this helper downloads and then executes, so it has to be
+ * named exactly, published, sized, checksummed and hosted on github.com before
+ * anything touches the network. A payload that fails any of those is refused with
+ * the reason attached — never downgraded to "download it anyway".
  */
 import { requestJson } from "./http.js";
 
 export const GITHUB_API_ORIGIN = "https://api.github.com";
 export const DEFAULT_UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+/** The one asset the in-app upgrade will run. */
+export const INSTALLER_ASSET_PREFIX = "TraeEnhancer-Setup-";
+const DIGEST_PREFIX = "sha256:";
+const GITHUB_DOWNLOAD_PATTERN = /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\//i;
 
 /**
  * Parses `v1.2.3` / `1.2.3` into numbers.
@@ -45,6 +52,59 @@ export function isNewerVersion(candidate, current) {
 }
 
 /**
+ * Picks the single asset this helper is willing to download and execute.
+ *
+ * Every condition is a hard gate. An asset that fails one is not silently
+ * skipped in favour of the next candidate: a release that cannot prove which
+ * installer is the right one is a release this helper must not upgrade from,
+ * because the alternative is running an unverified executable.
+ *
+ * Returns `{ asset }` or `{ reason }` — the reason is what the panel shows, so it
+ * has to name the missing piece rather than saying "unavailable".
+ */
+export function selectInstallerAsset(payload, version) {
+  const expected = `${INSTALLER_ASSET_PREFIX}${version}.exe`;
+  const assets = Array.isArray(payload?.assets) ? payload.assets : [];
+  const named = assets.filter((asset) => String(asset?.name ?? "") === expected);
+
+  if (named.length === 0) return { reason: `这个版本没有提供 ${expected}` };
+  if (named.length > 1) {
+    return { reason: `这个版本有 ${named.length} 个同名的 ${expected}，无法确定该用哪一个` };
+  }
+
+  const asset = named[0];
+  if (asset.state !== "uploaded") {
+    return { reason: `${expected} 还没有上传完成（state=${asset.state ?? "未知"}）` };
+  }
+
+  const size = Number(asset.size);
+  if (!Number.isInteger(size) || size <= 0) {
+    return { reason: `${expected} 没有报告文件大小` };
+  }
+
+  const digest = typeof asset.digest === "string" ? asset.digest.trim().toLowerCase() : "";
+  if (!digest.startsWith(DIGEST_PREFIX) || digest.length <= DIGEST_PREFIX.length) {
+    // Without a checksum there is nothing to verify the download against, and an
+    // installer that cannot be verified is one we refuse to run.
+    return { reason: `${expected} 没有提供 sha256 校验值` };
+  }
+
+  const url = typeof asset.browser_download_url === "string" ? asset.browser_download_url.trim() : "";
+  if (!GITHUB_DOWNLOAD_PATTERN.test(url)) {
+    return { reason: `${expected} 的下载地址不在 github.com` };
+  }
+
+  return {
+    asset: {
+      name: expected,
+      url,
+      size,
+      digest: digest.slice(DIGEST_PREFIX.length),
+    },
+  };
+}
+
+/**
  * Reduces a GitHub release payload to what the panel renders.
  *
  * `notes` is the raw Markdown body; the panel escapes it and renders a small
@@ -56,7 +116,7 @@ export function normalizeRelease(payload, { maxNotesLength = 20000 } = {}) {
   if (!version || !parseVersion(version)) return null;
 
   const url = typeof payload?.html_url === "string" ? payload.html_url.trim() : "";
-  if (!/^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\//i.test(url)) return null;
+  if (!GITHUB_DOWNLOAD_PATTERN.test(url)) return null;
 
   const name = typeof payload?.name === "string" ? payload.name.trim() : "";
   const body = typeof payload?.body === "string" ? payload.body : "";
@@ -65,6 +125,8 @@ export function normalizeRelease(payload, { maxNotesLength = 20000 } = {}) {
       ? new Date(payload.published_at).toISOString()
       : null;
 
+  const selection = selectInstallerAsset(payload, version);
+
   return {
     version,
     tag,
@@ -72,6 +134,8 @@ export function normalizeRelease(payload, { maxNotesLength = 20000 } = {}) {
     notes: body.slice(0, maxNotesLength),
     url,
     publishedAt,
+    installer: selection.asset ?? null,
+    installerError: selection.asset ? null : selection.reason,
   };
 }
 

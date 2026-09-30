@@ -14,6 +14,10 @@
   // the About tab can show the dot without the panel ever polling GitHub (the
   // workbench CSP would block that request anyway).
   const UPDATE_AVAILABLE_EVENT = "trae-enhancer:update-available";
+  // Dispatched by the daemon while an in-app upgrade is downloading or verifying.
+  // The upgrade request stays open for the whole download, so without this the
+  // panel could only show one frozen line until it finished.
+  const UPDATE_PROGRESS_EVENT = "trae-enhancer:update-progress";
 
   window.__traeEnhancerCleanup?.();
   document.getElementById(ROOT_ID)?.remove();
@@ -959,6 +963,28 @@
       margin-top: 16px;
     }
 
+    /* The upgrade progress bar. The track is the border colour so it stays legible
+       on both the light and the dark workbench without naming any colour twice. */
+    #${ROOT_ID} .te-install-bar {
+      height: 6px;
+      margin-top: 12px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: color-mix(in srgb, var(--te-border) 70%, transparent);
+    }
+
+    #${ROOT_ID} .te-install-bar-fill {
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--te-accent);
+      transition: width .2s cubic-bezier(.16,1,.3,1);
+    }
+
+    #${ROOT_ID} .te-install-bar[hidden] {
+      display: none;
+    }
+
     #${ROOT_ID} .te-spinner {
       width: 13px;
       height: 13px;
@@ -1486,8 +1512,9 @@
         <p class="te-update-state"></p>
         <div class="te-update-notes" hidden></div>
         <ol class="te-update-steps" hidden>
-          <li>点「立即升级」打开下载页，把新版装好。</li>
-          <li>回到 TRAE 点「重载界面」，面板就会换成新版。</li>
+          <li>点「立即升级」：助手会下载并校验新版，然后自动安装，全程不用离开 TRAE。</li>
+          <li>安装时助手服务要重启，面板会短暂消失，装好后自动回来。</li>
+          <li>万一没回来，重新打开一次桌面快捷方式即可。</li>
         </ol>
         <div class="te-update-actions">
           <button class="te-primary te-update-open" type="button" hidden>立即升级</button>
@@ -1834,6 +1861,38 @@
     </div>
   `;
 
+  /**
+   * The upgrade progress box.
+   *
+   * It is a modal rather than a line inside the About card because the download
+   * takes minutes and the card sits at the bottom of a scrollable page: the user
+   * asked for the upgrade and needs to see that it is happening, not to keep an
+   * eye on one line of text. The mask also has no dismiss path while an upgrade
+   * is running — the one thing that must not happen is the user losing track of
+   * an install that is already writing to disk.
+   */
+  const installMask = document.createElement("div");
+  installMask.className = "te-modal-mask";
+  installMask.innerHTML = `
+    <div class="te-modal" role="dialog" aria-modal="true" aria-label="升级助手">
+      <div class="te-modal-title te-install-title"></div>
+      <div class="te-modal-status te-install-status"></div>
+      <div class="te-install-bar" hidden><div class="te-install-bar-fill"></div></div>
+      <div class="te-modal-actions">
+        <button class="te-secondary te-install-close" type="button" hidden>关闭</button>
+        <button class="te-primary te-install-retry" type="button" hidden>重试</button>
+      </div>
+    </div>
+  `;
+  const installUi = {
+    title: installMask.querySelector(".te-install-title"),
+    status: installMask.querySelector(".te-install-status"),
+    bar: installMask.querySelector(".te-install-bar"),
+    fill: installMask.querySelector(".te-install-bar-fill"),
+    close: installMask.querySelector(".te-install-close"),
+    retry: installMask.querySelector(".te-install-retry"),
+  };
+
   const importFileInput = document.createElement("input");
   importFileInput.type = "file";
   importFileInput.accept = ".json,application/json";
@@ -1851,7 +1910,16 @@
     </svg>
   `;
 
-  root.append(panel, loginChoiceMask, oauthMask, transferMask, deleteMask, importFileInput, fab);
+  root.append(
+    panel,
+    loginChoiceMask,
+    oauthMask,
+    transferMask,
+    deleteMask,
+    installMask,
+    importFileInput,
+    fab,
+  );
   document.body.appendChild(root);
 
   let toastTimer = null;
@@ -1906,7 +1974,18 @@
       },
     }).then(async (response) => {
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      if (!response.ok) {
+        const error = new Error(data.error || `HTTP ${response.status}`);
+        /**
+         * The daemon's own error codes are carried through so a caller can act on
+         * what happened instead of on the sentence describing it. `install-in-flight`
+         * is the one that matters here: an upgrade already running is progress, not
+         * a failure, and matching Chinese text to tell them apart would break the
+         * moment either string is reworded.
+         */
+        if (typeof data.code === "string") error.code = data.code;
+        throw error;
+      }
       return data;
     });
   }
@@ -2884,6 +2963,64 @@
   let appUpdateSnapshot = null;
   let appUpdateConfig = null;
   let appUpdateBusy = false;
+  /**
+   * The upgrade as the daemon last reported it.
+   *
+   * Deliberately kept apart from the box below, because the box can be dismissed
+   * and this cannot: the button's label has to keep reflecting what the daemon
+   * actually knows. Read from every push and every *freshly fetched* payload —
+   * never from a snapshot already in hand, since that is the difference between
+   * "the daemon says it is downloading" and "the daemon said so once, before the
+   * download died".
+   */
+  let appUpdateStage = "idle";
+  /**
+   * The upgrade in flight, as the progress box renders it.
+   *
+   * It lives here rather than inside the click handler on purpose: the About card
+   * is repainted from every `/api/update` payload, and a state kept only inside
+   * the handler is wiped by the next repaint — which is exactly how the button
+   * used to come back to life mid-download and turn a running upgrade into
+   * "安装失败" on the second click.
+   */
+  let appUpdateInstall = null;
+
+  /**
+   * The stages that mean the daemon still knows about a live upgrade.
+   *
+   * These are restored from `/api/update` when the panel is opened, so a panel
+   * that was closed and reopened during an upgrade still shows where it is —
+   * the handed-over stage included, because its whole job is to tell the user
+   * where to find a wizard that opened behind TRAE. `failed` and `cancelled` are
+   * deliberately not restored: both have already been said out loud once, and a
+   * box that came back on every open would read as a fresh failure.
+   */
+  const INSTALL_RESUMABLE_STAGES = new Set(["downloading", "verifying", "installing"]);
+
+  const INSTALL_MB = (bytes) =>
+    Number.isFinite(bytes) && bytes >= 0 ? (bytes / 1024 / 1024).toFixed(1) : null;
+
+  /**
+   * Bytes as "1.4 / 23.7 MB".
+   *
+   * The bytes are shown next to the percentage on purpose: a percentage alone
+   * cannot tell a slow download apart from one that has stopped, and "it is stuck
+   * at 6%" is the difference between waiting and reporting a broken proxy.
+   */
+  function installSizePair(received, total) {
+    const done = INSTALL_MB(received);
+    const all = INSTALL_MB(total);
+    return done !== null && all !== null ? `${done} / ${all} MB` : "";
+  }
+
+  /**
+   * An upgrade the daemon is still working on — the handed-over stage included,
+   * since a wizard that has been started is the most fixed thing here: it may be
+   * sitting behind TRAE, and it stops the service on its way in.
+   */
+  function isUpgradeRunning() {
+    return INSTALL_RESUMABLE_STAGES.has(appUpdateStage);
+  }
 
   /**
    * Renders the small Markdown subset used by release notes.
@@ -2955,14 +3092,97 @@
   }
 
   /**
+   * Paints the progress box, or takes it away when there is nothing to report.
+   *
+   * Every sentence here is about what has actually happened, in the order it
+   * happened: the download is the only phase with a percentage, verification is
+   * one that never has one, and the last one hands the user over to the installer
+   * window that has just opened in front of them.
+   */
+  function renderInstallMask() {
+    const state = appUpdateInstall;
+    if (!state) {
+      installMask.classList.remove("open");
+      return;
+    }
+    installMask.classList.add("open");
+
+    const version = state.version ? ` v${state.version}` : "";
+    const percent = Number.isFinite(state.percent) ? state.percent : null;
+    let title = `正在升级助手${version}`;
+    let status = "";
+    let showBar = false;
+    let showClose = false;
+    let showRetry = false;
+
+    if (state.stage === "downloading") {
+      const size = installSizePair(state.received, state.total);
+      status =
+        `正在下载安装包${percent === null ? "" : ` ${percent}%`}` +
+        `${size ? `（${size}）` : ""}…请不要关闭 TRAE。`;
+      showBar = true;
+    } else if (state.stage === "verifying") {
+      status = "下载完成，正在校验安装包的完整性…";
+      showBar = true;
+    } else if (state.stage === "installing") {
+      title = "安装程序已启动";
+      /**
+       * Said out loud because it is the one part of this flow TRAE cannot do for
+       * the user: Windows only lets the window that owns the foreground hand it
+       * to someone else, so a wizard started by the background service shows up
+       * on the taskbar and stays behind TRAE. A user who does not know to look
+       * there concludes the upgrade did nothing.
+       */
+      status =
+        "安装向导已经打开。如果它没有出现在 TRAE 前面，请到任务栏点一下" +
+        "「TRAE SOLO CN Enhancer 安装」窗口。安装期间助手服务会短暂停止，" +
+        "向导结束后回到面板点「重载界面」即可。";
+      showClose = true;
+    } else if (state.stage === "failed") {
+      title = "升级失败";
+      status = state.error || "安装未能完成。";
+      showClose = true;
+      showRetry = true;
+    } else {
+      installMask.classList.remove("open");
+      return;
+    }
+
+    installUi.title.textContent = title;
+    installUi.status.textContent = status;
+    installUi.bar.hidden = !showBar;
+    installUi.fill.style.width = `${percent ?? 0}%`;
+    installUi.close.hidden = !showClose;
+    installUi.retry.hidden = !showRetry;
+  }
+
+  /**
    * Paints the About card from one `/api/update` payload.
    *
    * A failed check is reported as a failed check, never as "已是最新": the two
    * look identical to the user otherwise, and only one of them is true.
+   *
+   * `fresh` says the payload came off the wire just now, which is the only case
+   * where a live stage may be picked up. A repaint from the snapshot already in
+   * hand must not: the snapshot is whatever `/api/update` happened to say at some
+   * earlier moment, so restoring from it would resurrect a download that has since
+   * died and park the box on its last percentage forever.
    */
-  function renderAppUpdate(update) {
+  function renderAppUpdate(update, { fresh = false } = {}) {
     if (!update) return;
     appUpdateSnapshot = update;
+    /**
+     * A panel opened after the upgrade started learns about it here, which is the
+     * whole reason the daemon publishes the state on `/api/update` too: the pushes
+     * only reach a panel that was already listening.
+     */
+    if (fresh) {
+      appUpdateStage = update.install?.stage ?? "idle";
+      if (!appUpdateInstall && INSTALL_RESUMABLE_STAGES.has(update.install?.stage)) {
+        appUpdateInstall = { ...update.install };
+        renderInstallMask();
+      }
+    }
     const hasUpdate = Boolean(update.hasUpdate);
     const latest = update.latest;
     updateTabDot.hidden = !hasUpdate;
@@ -2988,6 +3208,15 @@
     else lines.push("还没有检查过更新。点「检查更新」可以立刻查一次。");
     if (update.error) lines.push(`上次检查失败：${update.error}`);
     else if (update.checkedAt) lines.push(`上次检查：${formatExpiry(update.checkedAt)}`);
+    // A release the helper refuses to install is said out loud, with the reason:
+    // a disabled button on its own would look like a bug in the panel.
+    if (hasUpdate && !latest?.installer) {
+      lines.push(
+        latest?.installerError
+          ? `这个版本无法自动安装：${latest.installerError}。`
+          : "这个版本无法自动安装。",
+      );
+    }
     updateUi.state.textContent = lines.join(" ");
 
     const notes = hasUpdate ? String(latest?.notes || "").trim() : "";
@@ -2998,9 +3227,20 @@
       updateUi.notes.textContent = "";
       updateUi.notes.hidden = true;
     }
-    // The upgrade steps only make sense next to a version to upgrade to.
+    // The upgrade steps only make sense next to a version to upgrade to, and the
+    // button only next to an installer the helper is willing to run.
     updateUi.steps.hidden = !hasUpdate;
     updateUi.open.hidden = !hasUpdate;
+    // A running upgrade keeps the button out of reach, so a second click cannot
+    // turn "already installing" into a failure message. The label comes from the
+    // daemon's own stage, not from the box: a failure the user dismissed is still
+    // the last known outcome, so the next click is a retry.
+    updateUi.open.disabled = (hasUpdate && !latest?.installer) || isUpgradeRunning();
+    updateUi.open.textContent = isUpgradeRunning()
+      ? "升级中…"
+      : appUpdateStage === "failed"
+        ? "重试"
+        : "立即升级";
     updateUi.reload.hidden = !hasUpdate;
     updateUi.check.textContent = hasUpdate ? "重新检查" : "检查更新";
     if (appUpdateConfig) renderAppUpdateConfig(appUpdateConfig, update);
@@ -3008,7 +3248,7 @@
 
   async function loadAppUpdate() {
     try {
-      renderAppUpdate(await api("/api/update"));
+      renderAppUpdate(await api("/api/update"), { fresh: true });
     } catch {
       // The daemon is unreachable; the card keeps its previous state and the
       // footer already reports the outage.
@@ -3025,7 +3265,7 @@
         method: "POST",
         body: JSON.stringify({ force: true }),
       });
-      renderAppUpdate(data);
+      renderAppUpdate(data, { fresh: true });
       if (!silent) {
         if (data.hasUpdate) showToast(`发现新版本 v${data.latest.version}`);
         else if (data.error) showToast(`检查更新失败：${data.error}`, true);
@@ -3042,17 +3282,128 @@
     }
   }
 
-  async function openUpdatePage() {
-    updateUi.open.disabled = true;
+  /**
+   * Downloads, verifies and installs the newer release, because the user asked.
+   *
+   * The request stays open for the whole download, so this only starts the state
+   * machine: the box is painted from the daemon's progress pushes, and this
+   * function's job is to open it, and to translate the request's own outcome into
+   * the same shape. Two things are deliberately not failures — a 409 saying an
+   * upgrade is already running (that is progress, and the pushes will drive it),
+   * and a dropped connection, which is the installer stopping the daemon on its
+   * way in and looks identical to a failure from here.
+   */
+  async function installAppUpdate() {
+    const latest = appUpdateSnapshot?.latest;
+    if (!latest?.installer) {
+      showToast(latest?.installerError || "还没有可安装的新版本，请先检查更新", true);
+      return;
+    }
+    appUpdateStage = "downloading";
+    appUpdateInstall = {
+      stage: "downloading",
+      version: latest.version,
+      percent: 0,
+      received: 0,
+      total: latest.installer.size,
+      error: null,
+    };
+    renderInstallMask();
+    updateUi.check.disabled = true;
+    renderAppUpdate(appUpdateSnapshot);
     try {
-      await api("/api/update/open", { method: "POST", body: "{}" });
-      showToast("已在浏览器打开下载页；装好新版后回到 TRAE 点「重载界面」");
+      await api("/api/update/install", { method: "POST", body: "{}" });
+      /**
+       * The daemon pushes this stage as well, so this is normally a no-op. It is
+       * here so a push that never arrived cannot leave the box frozen at the last
+       * download percentage while the installer window is already open: a reply
+       * this endpoint only sends after the checks passed is proof enough.
+       */
+      if (isUpgradeRunning()) {
+        appUpdateStage = "installing";
+        appUpdateInstall = { ...appUpdateInstall, stage: "installing", percent: 100 };
+        renderInstallMask();
+      }
+      showToast("安装程序已启动");
     } catch (error) {
-      showToast(error.message || String(error), true);
+      if (error?.code === "install-in-flight") {
+        /**
+         * The daemon is already upgrading, so the optimistic "正在下载 0%" set a
+         * moment ago is a lie and is dropped before anything is painted: leaving
+         * it up is what made a refused second click look like a second download
+         * that then hung. The daemon is the only side that knows whether the
+         * download is still running or the wizard is already open, so its own
+         * stage is read back — `renderAppUpdate` restores it from there.
+         */
+        appUpdateInstall = null;
+        renderInstallMask();
+        await loadAppUpdate();
+        showToast("升级已经开始了");
+        return;
+      }
+      if (error instanceof TypeError) {
+        appUpdateStage = "installing";
+        appUpdateInstall = { ...appUpdateInstall, stage: "installing", percent: 100 };
+        renderInstallMask();
+        showToast("助手正在重启，稍等片刻");
+        return;
+      }
+      const message = error?.message || String(error);
+      appUpdateStage = "failed";
+      appUpdateInstall = { ...appUpdateInstall, stage: "failed", error: message, percent: null };
+      renderInstallMask();
+      showToast(`升级失败：${message}`, true);
     } finally {
-      updateUi.open.disabled = false;
+      updateUi.check.disabled = false;
+      renderAppUpdate(appUpdateSnapshot);
     }
   }
+
+  /**
+   * Applies one progress push from the daemon.
+   *
+   * A push is always the newest thing known about the upgrade, so it overwrites
+   * whatever the panel holds: the daemon only sends one when something actually
+   * changed, and that change is newer than anything this side inferred.
+   */
+  function handleUpdateProgress(detail) {
+    if (!detail || typeof detail !== "object" || detail.stage === "idle") return;
+    appUpdateStage = detail.stage;
+    /**
+     * The daemon is still alive and saw the wizard exit, which means nothing was
+     * installed — it was closed, or it never started. The box has to go away and
+     * the button has to come back, or the panel keeps claiming an installer is
+     * running that no longer exists.
+     */
+    if (detail.stage === "cancelled") {
+      appUpdateInstall = null;
+      renderInstallMask();
+      renderAppUpdate(appUpdateSnapshot);
+      showToast("安装向导已关闭，本次升级没有完成");
+      return;
+    }
+    appUpdateInstall = { ...detail };
+    renderInstallMask();
+    renderAppUpdate(appUpdateSnapshot);
+  }
+
+  function handleUpdateProgressEvent(event) {
+    handleUpdateProgress(event?.detail);
+  }
+  window.addEventListener(UPDATE_PROGRESS_EVENT, handleUpdateProgressEvent);
+
+  // Dismisses the box and nothing else: `appUpdateStage` keeps what the daemon
+  // last said, so the button below still reads "重试" and the repaint from the
+  // snapshot already in hand cannot bring the box back.
+  installUi.close.addEventListener("click", () => {
+    appUpdateInstall = null;
+    renderInstallMask();
+    renderAppUpdate(appUpdateSnapshot);
+  });
+
+  installUi.retry.addEventListener("click", () => {
+    installAppUpdate().catch(() => {});
+  });
 
   /**
    * Re-injects the panel from the running daemon.
@@ -3913,7 +4264,7 @@
     checkAppUpdate().catch(() => {});
   });
   updateUi.open.addEventListener("click", () => {
-    openUpdatePage().catch(() => {});
+    installAppUpdate().catch(() => {});
   });
   updateUi.reload.addEventListener("click", () => {
     reloadPanel().catch(() => {});
@@ -4033,6 +4384,7 @@
     clearTimeout(accountsUpdatedTimer);
     window.removeEventListener(ACCOUNTS_UPDATED_EVENT, handleAccountsUpdated);
     window.removeEventListener(UPDATE_AVAILABLE_EVENT, handleUpdateAvailable);
+    window.removeEventListener(UPDATE_PROGRESS_EVENT, handleUpdateProgressEvent);
     stopOAuthPolling();
     stopFakeLogoutPolling();
     root.remove();

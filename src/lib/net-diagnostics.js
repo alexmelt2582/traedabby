@@ -50,6 +50,40 @@ function causeFields(error) {
   return fields;
 }
 
+/**
+ * undici's own timeout codes.
+ *
+ * These arrive as ordinary errors rather than aborts, so a caller that only
+ * checked `name === "AbortError"` classified the commonest timeout of all — the
+ * 5-minute `bodyTimeout` undici applies to every socket on its own — as a
+ * transport failure and printed the raw chain at the user.
+ */
+const TIMEOUT_CODES = new Set([
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+]);
+
+/**
+ * Whether a failure — or anything in its `cause` chain — was a timeout.
+ *
+ * Walks the chain because Node wraps the real error at every layer: the fetch
+ * failure carries the undici error as its cause, and it is that inner one that
+ * knows the code.
+ */
+export function isTimeoutError(error) {
+  const seen = new Set();
+  let current = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    if (current.name === "AbortError" || current.name === "TimeoutError") return true;
+    if (typeof current.name === "string" && current.name.endsWith("TimeoutError")) return true;
+    if (TIMEOUT_CODES.has(current.code)) return true;
+    current = current.cause;
+  }
+  return false;
+}
+
 export function describeErrorChain(error, { maxDepth = 4 } = {}) {
   if (!error) return "unknown error";
   const parts = [];

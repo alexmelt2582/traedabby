@@ -6,6 +6,7 @@ import {
   describeErrorChain,
   describeProxyTestVerdict,
   formatProbeLine,
+  isTimeoutError,
   probeSucceeded,
   redactQueryValues,
   redactUrl,
@@ -29,6 +30,35 @@ test("describeErrorChain exposes the useful transport cause", () => {
   assert.match(described, /fetch failed/);
   assert.match(described, /ECONNREFUSED/);
   assert.match(described, /127\.0\.0\.1:9/);
+});
+
+test("a timeout is recognised wherever it sits in the cause chain", () => {
+  // undici's own timeouts are ordinary errors, not aborts: this is the one that
+  // used to reach the panel as a raw "Body Timeout Error | UND_ERR_BODY_TIMEOUT".
+  const body = new Error("Body Timeout Error");
+  body.code = "UND_ERR_BODY_TIMEOUT";
+  assert.equal(isTimeoutError(withCause("fetch failed", body)), true);
+  assert.equal(isTimeoutError(body), true);
+
+  const aborted = new Error("This operation was aborted");
+  aborted.name = "AbortError";
+  assert.equal(isTimeoutError(aborted), true);
+
+  const connect = new Error("Connect Timeout Error");
+  connect.code = "UND_ERR_CONNECT_TIMEOUT";
+  assert.equal(isTimeoutError(connect), true);
+
+  // An ordinary transport failure must stay one: telling a user to check their
+  // network when the release asset is simply gone would be a wrong instruction.
+  const refused = new Error("fetch failed");
+  refused.cause = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+  assert.equal(isTimeoutError(refused), false);
+  assert.equal(isTimeoutError(null), false);
+
+  // A chain that points at itself must not spin.
+  const loop = new Error("fetch failed");
+  loop.cause = loop;
+  assert.equal(isTimeoutError(loop), false);
 });
 
 test("secret query values are removed from reports", () => {

@@ -8,6 +8,7 @@ import {
   isNewerVersion,
   normalizeRelease,
   parseVersion,
+  selectInstallerAsset,
 } from "../src/lib/app-update.js";
 
 const RELEASE = {
@@ -16,6 +17,15 @@ const RELEASE = {
   html_url: "https://github.com/alexmelt2582/traedabby/releases/tag/v1.2.0",
   published_at: "2026-09-25T02:00:00Z",
   body: "## 本次更新\n\n- 支持检查新版本\n",
+};
+
+const INSTALLER_ASSET = {
+  name: "TraeEnhancer-Setup-1.2.0.exe",
+  state: "uploaded",
+  size: 23829760,
+  digest: "sha256:5e41d960e52560712f63e1ecaa1d45e2ed0cd798bc40ccb68ae47a85fb3b27ee",
+  browser_download_url:
+    "https://github.com/alexmelt2582/traedabby/releases/download/v1.2.0/TraeEnhancer-Setup-1.2.0.exe",
 };
 
 test("only a three part version is parsed", () => {
@@ -42,14 +52,98 @@ test("an unparseable version is never reported as newer", () => {
 });
 
 test("a release payload is reduced to the fields the panel renders", () => {
-  assert.deepEqual(normalizeRelease(RELEASE), {
+  assert.deepEqual(normalizeRelease({ ...RELEASE, assets: [INSTALLER_ASSET] }), {
     version: "1.2.0",
     tag: "v1.2.0",
     title: "v1.2.0",
     notes: RELEASE.body,
     url: RELEASE.html_url,
     publishedAt: "2026-09-25T02:00:00.000Z",
+    installer: {
+      name: "TraeEnhancer-Setup-1.2.0.exe",
+      url: INSTALLER_ASSET.browser_download_url,
+      size: 23829760,
+      digest: "5e41d960e52560712f63e1ecaa1d45e2ed0cd798bc40ccb68ae47a85fb3b27ee",
+    },
+    installerError: null,
   });
+});
+
+test("a release without a downloadable installer is still reported, with the reason", () => {
+  // The version has to reach the panel even when it cannot be installed: telling
+  // the user "no update" about a release that exists would be a lie.
+  const release = normalizeRelease({ ...RELEASE, assets: [] });
+  assert.equal(release.version, "1.2.0");
+  assert.equal(release.installer, null);
+  assert.match(release.installerError, /没有提供 TraeEnhancer-Setup-1\.2\.0\.exe/);
+});
+
+test("the installer asset has to be the exact name for this version", () => {
+  const renamed = { ...INSTALLER_ASSET, name: "TraeEnhancer-Setup-1.1.0.exe" };
+  const selection = selectInstallerAsset({ assets: [renamed] }, "1.2.0");
+  assert.equal(selection.asset, undefined);
+  assert.match(selection.reason, /没有提供/);
+});
+
+test("an asset that is not fully uploaded is refused", () => {
+  const selection = selectInstallerAsset(
+    { assets: [{ ...INSTALLER_ASSET, state: "starter" }] },
+    "1.2.0",
+  );
+  assert.equal(selection.asset, undefined);
+  assert.match(selection.reason, /还没有上传完成/);
+});
+
+test("an asset without a sha256 digest is refused instead of downloaded unverified", () => {
+  // This is the whole safety argument for running the file: no digest, no install.
+  for (const digest of [undefined, null, "", "sha256:", "md5:abc", "abc"]) {
+    const selection = selectInstallerAsset(
+      { assets: [{ ...INSTALLER_ASSET, digest }] },
+      "1.2.0",
+    );
+    assert.equal(selection.asset, undefined, String(digest));
+    assert.match(selection.reason, /没有提供 sha256 校验值/, String(digest));
+  }
+});
+
+test("an asset with a missing or impossible size is refused", () => {
+  for (const size of [0, -1, "many", undefined, 1.5]) {
+    const selection = selectInstallerAsset({ assets: [{ ...INSTALLER_ASSET, size }] }, "1.2.0");
+    assert.equal(selection.asset, undefined, String(size));
+    assert.match(selection.reason, /没有报告文件大小/, String(size));
+  }
+});
+
+test("two assets with the same name are refused rather than guessed between", () => {
+  const selection = selectInstallerAsset(
+    { assets: [INSTALLER_ASSET, { ...INSTALLER_ASSET, size: 1 }] },
+    "1.2.0",
+  );
+  assert.equal(selection.asset, undefined);
+  assert.match(selection.reason, /无法确定该用哪一个/);
+});
+
+test("an installer hosted anywhere but github.com is refused", () => {
+  for (const url of [
+    "https://example.com/x.exe",
+    "http://github.com/alexmelt2582/traedabby/releases/download/v1.2.0/x.exe",
+    "file:///C:/Windows/System32/calc.exe",
+  ]) {
+    const selection = selectInstallerAsset(
+      { assets: [{ ...INSTALLER_ASSET, browser_download_url: url }] },
+      "1.2.0",
+    );
+    assert.equal(selection.asset, undefined, url);
+    assert.match(selection.reason, /不在 github\.com/, url);
+  }
+});
+
+test("a digest is compared case-insensitively and stripped of its prefix", () => {
+  const selection = selectInstallerAsset(
+    { assets: [{ ...INSTALLER_ASSET, digest: "SHA256:ABCDEF" }] },
+    "1.2.0",
+  );
+  assert.equal(selection.asset.digest, "abcdef");
 });
 
 test("a payload without a usable version or address is rejected", () => {
@@ -60,8 +154,8 @@ test("a payload without a usable version or address is rejected", () => {
 });
 
 test("the release address must be a github.com release page", () => {
-  // This URL is what `/api/update/open` hands to the browser, so a tampered
-  // payload must not be able to point it anywhere else.
+  // The release page is the identity the panel shows for a version, so a tampered
+  // payload must not be able to make this helper claim it came from anywhere else.
   const rejected = [
     "https://example.com/alexmelt2582/traedabby/releases/tag/v1.2.0",
     "http://github.com/alexmelt2582/traedabby/releases/tag/v1.2.0",

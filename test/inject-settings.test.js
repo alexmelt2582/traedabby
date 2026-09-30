@@ -182,11 +182,29 @@ test("release notes are built as nodes, never parsed as HTML", () => {
 });
 
 test("a failed update check is not reported as being up to date", () => {
-  const body = functionBody("function renderAppUpdate\\(update\\)");
+  const body = functionBody("function renderAppUpdate\\(update, \\{ fresh = false \\} = \\{\\}\\)");
   assert.ok(body.includes("检查失败"), "a failed check has no wording of its own");
   assert.ok(body.includes("update.error"), "the failure reason is never rendered");
   // The dot must follow the payload, not the mere fact that a check happened.
   assert.ok(body.includes("updateTabDot.hidden = !hasUpdate"));
+});
+
+test("only a freshly fetched payload may restore a live upgrade stage", () => {
+  const body = functionBody("function renderAppUpdate\\(update, \\{ fresh = false \\} = \\{\\}\\)");
+  // The panel repaints this card from the payload already in hand — after a push,
+  // after closing the progress box. Restoring a stage there is how a download that
+  // had already failed came back and sat at the last percentage it reached.
+  assert.ok(
+    body.includes("if (fresh) {"),
+    "the restore path must be gated on a payload that just came off the wire",
+  );
+  assert.ok(body.includes("appUpdateStage = update.install?.stage"));
+  // The button's label is the daemon's stage, not the box's: a dismissed failure is
+  // still the last known outcome, so the next click is a retry, not a first try.
+  assert.ok(
+    body.includes('appUpdateStage === "failed"'),
+    "the retry label must survive the box being dismissed",
+  );
 });
 
 test("the about card reads the daemon's cached result instead of GitHub", () => {

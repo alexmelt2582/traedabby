@@ -34,6 +34,11 @@ import {
   fetchLatestRelease,
   isNewerVersion,
 } from "./lib/app-update.js";
+import {
+  cleanupInstallerDirectory,
+  launchInstaller,
+  prepareInstaller,
+} from "./lib/app-installer.js";
 import { UI_INJECT_PATH } from "./lib/app-paths.js";
 import { createDaemonLogger } from "./lib/daemon-log.js";
 import { detectSeaApi, loadInjectSource, renderInjectScript } from "./lib/inject-source.js";
@@ -91,7 +96,7 @@ import {
   traeExecutableExists,
   waitForCdp,
 } from "./lib/trae-process.js";
-import { TraeOAuthManager, openExternal } from "./lib/trae-oauth.js";
+import { TraeOAuthManager } from "./lib/trae-oauth.js";
 import {
   applyAuthSnapshot,
   purgeLegacyTransactionDirectory,
@@ -134,6 +139,29 @@ let loginStartInFlight = null;
 let insightsRefreshInFlight = null;
 let checkinInFlight = null;
 let keepaliveInFlight = null;
+/**
+ * The in-app upgrade holds the same single slot as every account operation: it
+ * stops this daemon by the end of it, so it must not overlap a check-in, a
+ * keep-alive or a switch that would be interrupted half way.
+ */
+let installInFlight = null;
+/**
+ * Set once the installer has been started, and held until it is known not to
+ * have upgraded anything.
+ *
+ * The download request goes back to null the moment the panel has its reply,
+ * while the wizard it started outlives that reply by design — the reply has to
+ * reach the panel before the wizard stops this process. Without this second flag
+ * the slot would be open again with a wizard already on screen, and a second
+ * click on「立即升级」would start a second download on top of it. That is not
+ * hypothetical: it is exactly the "下载又弹出来一次，卡在 6%" report.
+ */
+let installHandedOff = false;
+
+/** True while an upgrade owns the slot, download and wizard alike. */
+function isInstallBusy() {
+  return installInFlight !== null || installHandedOff;
+}
 
 /**
  * Assigned by `main()` once the HTTP server is listening. Restarting is only
@@ -221,6 +249,16 @@ const ACCOUNTS_UPDATED_EVENT = "trae-enhancer:accounts-updated";
  * About tab can show its dot without waiting to be reopened.
  */
 const UPDATE_AVAILABLE_EVENT = "trae-enhancer:update-available";
+
+/**
+ * Tells the injected panel how far the in-app upgrade has got.
+ *
+ * The download runs inside the panel's own request, so without this the panel
+ * could only show one frozen line for the two minutes the bytes take to arrive.
+ * The payload carries the whole install state, so a panel that was opened halfway
+ * through can paint itself from one event instead of needing history.
+ */
+const UPDATE_PROGRESS_EVENT = "trae-enhancer:update-progress";
 
 /**
  * Tells the injected panel that account state changed on disk.
@@ -340,6 +378,51 @@ async function syncTraeUpdateSetting({ suppress, previousMode = null } = {}) {
  */
 let appUpdateState = { checkedAt: null, latest: null, error: null };
 let appUpdateCheckInFlight = null;
+/**
+ * What the in-app upgrade is doing right now.
+ *
+ * Advanced only by `POST /api/update/install`, pushed to the panel as it changes
+ * (see `UPDATE_PROGRESS_EVENT`) and read back when the About tab is opened, so a
+ * panel that reconnects halfway through still shows where the upgrade is. The
+ * push does go silent at the very end — the installer stops this process — which
+ * is why the panel also treats a dropped connection as "the installer took over"
+ * rather than as a failure.
+ */
+let installState = idleInstallState();
+
+/** Highest 5% bucket already pushed, so a 23 MB download is not 350 events. */
+let installProgressBucket = 0;
+
+function idleInstallState() {
+  return { stage: "idle", version: null, error: null, percent: null, received: null, total: null };
+}
+
+function publishInstallState(cdpClient, patch) {
+  installState = { ...installState, ...patch };
+  return notifyPanel(cdpClient, UPDATE_PROGRESS_EVENT, { ...installState });
+}
+
+/**
+ * Reopens the upgrade slot after a wizard that upgraded nothing.
+ *
+ * The installer is what stops this daemon, so reaching this with the process
+ * still alive means the wizard ended before it replaced a single file: the user
+ * closed it, or it could not start at all. Reporting `cancelled` rather than
+ * `idle` matters — `idle` is also what a freshly started daemon reports, and the
+ * panel deliberately ignores that one so a stale box cannot reappear.
+ */
+function releaseInstallHandoff(cdpClient) {
+  if (!installHandedOff) return;
+  installHandedOff = false;
+  installProgressBucket = 0;
+  publishInstallState(cdpClient, {
+    stage: "cancelled",
+    error: null,
+    percent: null,
+    received: null,
+    total: null,
+  });
+}
 
 function appUpdatePayload() {
   const latest = appUpdateState.latest;
@@ -350,6 +433,7 @@ function appUpdatePayload() {
     latest,
     error: appUpdateState.error,
     hasUpdate: !!latest && isNewerVersion(latest.version, APP_VERSION),
+    install: { ...installState },
   };
 }
 
@@ -392,6 +476,116 @@ async function checkForAppUpdate({ force = false } = {}) {
     }
   })();
   return appUpdateCheckInFlight;
+}
+
+/**
+ * Downloads, verifies and finally runs the installer for a found release.
+ *
+ * The download is done inside the user's own request, so a failure is reported
+ * where the button is, instead of being written to a log the user never opens.
+ * The request can stay open for minutes, which is why every change of state is
+ * pushed to the panel as it happens instead of being answerable only at the end.
+ *
+ * The installer stops this daemon on its way in — Windows will not let it replace
+ * a running executable — so this process does not survive to see the outcome.
+ * That is also why the launch is detached and delayed: the reply has to reach the
+ * panel's socket before the installer takes the port down. The installer itself
+ * is what brings the service back afterwards.
+ */
+async function installAppUpdate(release, cdpClient) {
+  const installer = release.installer;
+  installProgressBucket = 0;
+  await publishInstallState(cdpClient, {
+    stage: "downloading",
+    version: release.version,
+    error: null,
+    percent: 0,
+    received: 0,
+    total: installer.size,
+  });
+  try {
+    const { path: installerPath, bytes, reused } = await prepareInstaller(installer, {
+      // Verification runs on a file that is already fully on disk, so the bar is
+      // full by then whatever the last chunk happened to round to.
+      onStage: (stage) =>
+        publishInstallState(cdpClient, stage === "verifying" ? { stage, percent: 100 } : { stage }),
+      /**
+       * Throttled to whole 5% steps: the download reports every chunk, and one
+       * CDP evaluation per chunk would spend more time talking to the panel than
+       * the panel spends reading it. The final 100% is not this path — the verify
+       * stage below states it, and it is the only one that is actually complete.
+       */
+      onProgress: ({ received, total }) => {
+        const percent = total > 0 ? Math.min(100, Math.floor((received / total) * 100)) : null;
+        installState = { ...installState, received, total, percent };
+        const bucket = percent === null ? installProgressBucket : Math.floor(percent / 5);
+        if (bucket <= installProgressBucket) return undefined;
+        installProgressBucket = bucket;
+        return notifyPanel(cdpClient, UPDATE_PROGRESS_EVENT, { ...installState });
+      },
+    });
+    console.log(
+      `[update] ${reused ? "reused the already verified" : "verified"} ${installer.name}` +
+        ` (${bytes} bytes, sha256 ${installer.digest.slice(0, 12)}…), starting the installer`,
+    );
+    await publishInstallState(cdpClient, {
+      stage: "installing",
+      percent: 100,
+      received: installer.size,
+      total: installer.size,
+    });
+
+    /**
+     * The slot stays shut from here on.
+     *
+     * From the moment a wizard is due to appear, a second「立即升级」has to be
+     * refused instead of starting a parallel download of the very file that
+     * wizard is running from — Windows answers a write to a running executable
+     * with an error or with nothing at all, which is the download that appeared
+     * to hang once already.
+     */
+    installHandedOff = true;
+    const timer = setTimeout(() => {
+      try {
+        const child = launchInstaller(installerPath);
+        console.log(`[update] installer started pid=${child.pid ?? "unknown"}`);
+        child.once("error", (error) => {
+          console.error(`[update] the installer could not start: ${error?.message || error}`);
+          releaseInstallHandoff(cdpClient);
+        });
+        // Only reachable while this process is alive, and Inno stops the service
+        // before it replaces a single file: a wizard that exited here upgraded
+        // nothing, so the button has to become usable again.
+        child.once("exit", () => releaseInstallHandoff(cdpClient));
+      } catch (error) {
+        console.error(`[update] starting the installer failed: ${error?.message || error}`);
+        releaseInstallHandoff(cdpClient);
+      }
+    }, 800);
+    timer.unref?.();
+
+    return { stage: "installing", version: release.version, installer: installer.name };
+  } catch (error) {
+    const message = error?.message || String(error);
+    /**
+     * Two readers, two sentences. The log gets the full technical message — the
+     * only place the real cause survives, since the daemon dies in the middle of
+     * every successful install and the panel box can be closed — while the panel
+     * gets the short one a person can act on. `userMessage` is set by the module
+     * that knows which failures are worth translating; falling back to `message`
+     * keeps an untranslated failure visible rather than blank.
+     */
+    const reported = error?.userMessage || message;
+    console.error(`[update] install failed: ${message}`);
+    await publishInstallState(cdpClient, {
+      stage: "failed",
+      error: reported,
+      percent: null,
+      received: null,
+      total: null,
+    });
+    throw error;
+  }
 }
 
 /**
@@ -1106,7 +1300,8 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
       fakeLogoutManager.isActive() ||
       insightsRefreshInFlight ||
       checkinInFlight ||
-      keepaliveInFlight
+      keepaliveInFlight ||
+      isInstallBusy()
     ) {
       jsonResponse(response, 409, {
         ok: false,
@@ -1163,7 +1358,8 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
       fakeLogoutManager.isActive() ||
       insightsRefreshInFlight ||
       checkinInFlight ||
-      keepaliveInFlight
+      keepaliveInFlight ||
+      isInstallBusy()
     ) {
       // Another sweep is already producing fresh state and will push when it is
       // done. The panel uses this flag to fall back to its own credit refresh
@@ -1252,6 +1448,10 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
       jsonResponse(response, 409, { ok: false, error: "Account keepalive is already running" });
       return;
     }
+    if (isInstallBusy()) {
+      jsonResponse(response, 409, { ok: false, error: "助手更新正在安装，请稍后再试" });
+      return;
+    }
     if (fakeLogoutManager.isActive()) {
       jsonResponse(response, 409, {
         ok: false,
@@ -1289,6 +1489,10 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
     }
     if (keepaliveInFlight) {
       jsonResponse(response, 409, { ok: false, error: "Account keepalive is already running" });
+      return;
+    }
+    if (isInstallBusy()) {
+      jsonResponse(response, 409, { ok: false, error: "助手更新正在安装，请稍后再试" });
       return;
     }
     if (loginStartInFlight) {
@@ -1361,6 +1565,10 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
       jsonResponse(response, 409, { ok: false, error: "Account keepalive is already running" });
       return;
     }
+    if (isInstallBusy()) {
+      jsonResponse(response, 409, { ok: false, error: "助手更新正在安装，请稍后再试" });
+      return;
+    }
     const cockpit = await resolveCockpitPolicy();
     if (cockpit.action !== "run") {
       jsonResponse(response, 409, {
@@ -1405,7 +1613,8 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
       fakeLogoutManager.isActive() ||
       insightsRefreshInFlight ||
       checkinInFlight ||
-      keepaliveInFlight
+      keepaliveInFlight ||
+      isInstallBusy()
     ) {
       jsonResponse(response, 409, { ok: false, error: "另一个账号操作正在进行，请稍后再试" });
       return;
@@ -1479,6 +1688,10 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
       jsonResponse(response, 409, { ok: false, error: "Account keepalive is already running" });
       return;
     }
+    if (isInstallBusy()) {
+      jsonResponse(response, 409, { ok: false, error: "助手更新正在安装，请稍后再试" });
+      return;
+    }
     if (fakeLogoutManager.isActive()) {
       jsonResponse(response, 409, {
         ok: false,
@@ -1509,6 +1722,10 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
     }
     if (keepaliveInFlight) {
       jsonResponse(response, 409, { ok: false, error: "Account keepalive is already running" });
+      return;
+    }
+    if (isInstallBusy()) {
+      jsonResponse(response, 409, { ok: false, error: "助手更新正在安装，请稍后再试" });
       return;
     }
     if (loginStartInFlight) {
@@ -1562,6 +1779,10 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
     }
     if (keepaliveInFlight) {
       jsonResponse(response, 409, { ok: false, error: "Account keepalive is already running" });
+      return;
+    }
+    if (isInstallBusy()) {
+      jsonResponse(response, 409, { ok: false, error: "助手更新正在安装，请稍后再试" });
       return;
     }
     if (fakeLogoutManager.isActive()) {
@@ -1628,22 +1849,65 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
     return;
   }
 
-  if (request.method === "POST" && pathname === "/api/update/open") {
-    // The URL comes from this daemon's own cached check, never from the request
-    // body: this endpoint opens a browser, so it must not become a way to open
-    // an arbitrary address on the user's machine.
-    const url = appUpdateState.latest?.url;
-    if (!url) {
-      jsonResponse(response, 404, { ok: false, error: "还没有可用的下载地址，请先检查更新" });
+  /**
+   * Downloads and installs the release the user asked for.
+   *
+   * The target comes from this daemon's own cached check, never from the request
+   * body: this endpoint downloads a file and then runs it, so it must not become
+   * a way to execute an arbitrary address on the user's machine.
+   */
+  if (request.method === "POST" && pathname === "/api/update/install") {
+    const release = appUpdateState.latest;
+    if (!release?.installer) {
+      jsonResponse(response, 409, {
+        ok: false,
+        error: release?.installerError || "还没有可安装的新版本，请先检查更新",
+      });
       return;
     }
+    /**
+     * The two 409s are told apart by `code`, not by their text: one means the
+     * upgrade is already running and the panel should keep showing its progress,
+     * the other means it never started. Reading the message would put the exact
+     * wording of both strings on the panel's side of the wire.
+     */
+    if (isInstallBusy()) {
+      jsonResponse(response, 409, {
+        ok: false,
+        code: "install-in-flight",
+        error: "助手更新正在安装，请稍后再试",
+      });
+      return;
+    }
+    if (
+      switchInFlight ||
+      loginStartInFlight ||
+      oauthManager.isActive() ||
+      fakeLogoutManager.isActive() ||
+      insightsRefreshInFlight ||
+      checkinInFlight ||
+      keepaliveInFlight
+    ) {
+      jsonResponse(response, 409, {
+        ok: false,
+        code: "account-busy",
+        error: "另一个账号操作正在进行，请稍后再试",
+      });
+      return;
+    }
+    installInFlight = installAppUpdate(release, cdpClient);
     try {
-      const method = await openExternal(url);
-      jsonResponse(response, 200, { ok: true, method });
+      const result = await installInFlight;
+      jsonResponse(response, 200, { ok: true, ...result });
     } catch (error) {
       const message = error.message || String(error);
-      console.error(`[update] opening the release page failed: ${message}`);
-      jsonResponse(response, 500, { ok: false, error: message });
+      // The response goes to the same panel that has been reading the progress
+      // pushes, so it carries the same short sentence rather than the raw chain.
+      const reported = error?.userMessage || message;
+      console.error(`[update] installing ${release.version} failed: ${message}`);
+      jsonResponse(response, 500, { ok: false, error: reported });
+    } finally {
+      installInFlight = null;
     }
     return;
   }
@@ -1892,6 +2156,12 @@ async function main() {
   const purgedTransactionDirectory = await purgeLegacyTransactionDirectory(
     LEGACY_TRANSACTION_DIR,
   );
+  /**
+   * An installed upgrade stops this daemon, so the installer it downloaded is
+   * still on disk the next time this process starts — and so is any download that
+   * never got that far. Neither is state worth keeping.
+   */
+  const installersCleared = await cleanupInstallerDirectory();
   const accountRepair = await accountStore.repairIndex();
   const apiToken = await getApiToken();
   const seaApi = await detectSeaApi();
@@ -1942,7 +2212,8 @@ async function main() {
       fakeLogoutManager.isActive() ||
       insightsRefreshInFlight ||
       checkinInFlight ||
-      keepaliveInFlight
+      keepaliveInFlight ||
+      isInstallBusy()
     ) {
       // Another sweep is already doing the same work; it will push when it is done.
       return;
@@ -2206,6 +2477,9 @@ async function main() {
 
   console.log(`${APP_NAME} daemon listening on http://${LOOPBACK_HOST}:${UI_PORT}`);
   console.log(`[cleanup] removed legacy transactions: ${purgedTransactionDirectory}`);
+  console.log(
+    `[cleanup] update downloads: ${installersCleared ? "cleared" : "kept (the installer is still running)"}`,
+  );
   if (accountRepair.repaired) {
     console.log(`[cleanup] repaired account metadata: ${accountRepair.repaired}`);
   }
@@ -2255,7 +2529,8 @@ async function main() {
         fakeLogoutManager.isActive() ||
         insightsRefreshInFlight ||
         checkinInFlight ||
-        keepaliveInFlight
+        keepaliveInFlight ||
+        isInstallBusy()
       ) {
         return;
       }
