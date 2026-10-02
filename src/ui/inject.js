@@ -18,6 +18,11 @@
   // The upgrade request stays open for the whole download, so without this the
   // panel could only show one frozen line until it finished.
   const UPDATE_PROGRESS_EVENT = "trae-enhancer:update-progress";
+  // Dispatched by the daemon on behalf of another process that has something to
+  // tell the user, such as the launcher failing to bring TRAE to the front. It is
+  // one-shot: the panel may well be closed when it arrives, so the handler opens
+  // it before showing the toast.
+  const NOTICE_EVENT = "trae-enhancer:notice";
 
   window.__traeEnhancerCleanup?.();
   document.getElementById(ROOT_ID)?.remove();
@@ -708,6 +713,114 @@
       white-space: nowrap;
     }
 
+    #${ROOT_ID} .te-acc-credits {
+      position: relative;
+    }
+
+    #${ROOT_ID} .te-cred-dot {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #ef4444;
+      box-shadow: 0 0 0 2px var(--te-panel-solid);
+    }
+
+    /* Anchored to the icon but parented to the root, so a long list can never be
+       clipped by the scrolling account area. */
+    #${ROOT_ID} .te-cred-pop {
+      position: fixed;
+      z-index: 2147483646;
+      width: 262px;
+      max-height: 330px;
+      overflow: auto;
+      padding: 10px 11px;
+      border: 1px solid var(--te-border);
+      border-radius: 10px;
+      background: var(--te-panel-solid);
+      color: var(--te-text);
+      box-shadow: 0 14px 34px rgba(0, 0, 0, .3);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    #${ROOT_ID} .te-cred-pop-head {
+      margin-bottom: 6px;
+      font-size: 11.5px;
+      font-weight: 650;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #${ROOT_ID} .te-cred-pop-head span {
+      color: var(--te-muted);
+      font-weight: 500;
+    }
+
+    #${ROOT_ID} .te-cred-pop-block {
+      margin-top: 7px;
+    }
+
+    #${ROOT_ID} .te-cred-pop-block.urgent {
+      padding: 7px 8px 5px;
+      border: 1px solid color-mix(in srgb, #f59e0b 45%, transparent);
+      border-radius: 7px;
+      background: color-mix(in srgb, #f59e0b 9%, transparent);
+    }
+
+    #${ROOT_ID} .te-cred-pop-title {
+      color: var(--te-muted);
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: .05em;
+    }
+
+    #${ROOT_ID} .te-cred-pop-note {
+      margin-top: 2px;
+      color: #f59e0b;
+      font-size: 10px;
+    }
+
+    #${ROOT_ID} .te-cred-pop-row {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 2px 0;
+    }
+
+    #${ROOT_ID} .te-cred-pop-source {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #${ROOT_ID} .te-cred-pop-amount {
+      flex: 0 0 auto;
+      font-weight: 650;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #${ROOT_ID} .te-cred-pop-when {
+      flex: 0 0 auto;
+      color: var(--te-muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    #${ROOT_ID} .te-cred-pop-block.urgent .te-cred-pop-when {
+      color: #f59e0b;
+      font-weight: 650;
+    }
+
+    #${ROOT_ID} .te-cred-pop-empty {
+      padding: 6px 0 2px;
+      color: var(--te-muted);
+    }
+
     #${ROOT_ID} .te-empty {
       padding: 30px 18px;
       text-align: center;
@@ -1277,6 +1390,7 @@
     #${ROOT_ID} .te-danger:disabled { opacity: .5; }
     #${ROOT_ID} .te-acc-delete:hover { color: #ef4444; }
     #${ROOT_ID} .te-acc-renew:hover { color: var(--te-accent); }
+    #${ROOT_ID} .te-acc-credits:hover { color: var(--te-accent); }
 
     /* Update card. The version itself lives in the hero above, so this card only
        reports status and what to do about it. */
@@ -1609,6 +1723,13 @@
               </label>
               <label class="te-set-row">
                 <span class="te-set-text">
+                  <span class="te-set-name">积分到期提醒</span>
+                  <span class="te-set-hint">快到期时在账号列表标个红点，点积分图标看明细</span>
+                </span>
+                <select class="te-select te-checkin-reminder"></select>
+              </label>
+              <label class="te-set-row">
+                <span class="te-set-text">
                   <span class="te-set-name">页面加载时补签</span>
                   <span class="te-set-hint">TRAE 重启后立刻检查一次，不用等间隔</span>
                 </span>
@@ -1791,6 +1912,12 @@
   const toast = document.createElement("div");
   toast.className = "te-toast";
 
+  // Parented to the root rather than to the panel: the panel scrolls and clips,
+  // and a popover anchored to a row inside it would be cut off at the edge.
+  const creditPopover = document.createElement("div");
+  creditPopover.className = "te-cred-pop";
+  creditPopover.hidden = true;
+
   panel.append(header, tabs, content, footer, toast);
 
   const oauthMask = document.createElement("div");
@@ -1917,6 +2044,7 @@
     transferMask,
     deleteMask,
     installMask,
+    creditPopover,
     importFileInput,
     fab,
   );
@@ -1943,6 +2071,16 @@
   // here so the empty state can say it instead of looking like "no accounts yet".
   let adoptionError = null;
   let accountsById = new Map();
+  // The last painted account list, kept so a settings change can redraw it
+  // without asking the daemon for the same payload again.
+  let accountsView = null;
+  // How many days ahead of expiry a credit segment starts being flagged. The
+  // daemon owns the value; this only holds the last one it reported, and the
+  // default matches the daemon's so the first paint is not wrong either.
+  let creditReminderDays = 7;
+  // The icon whose popover is currently open, or null. Held as the element rather
+  // than an id so a repaint that detaches it closes the popover with it.
+  let creditPopoverAnchor = null;
   let deleteAccountId = null;
   let deleteAccountName = "";
 
@@ -2150,8 +2288,159 @@
     };
   }
 
+  function accountCreditSegments(account) {
+    const segments = account?.insights?.credits?.segments;
+    return Array.isArray(segments) ? segments : [];
+  }
+
+  /**
+   * The credit segments that expire inside the reminder window.
+   *
+   * Deliberately narrow: something left to use, an expiry in the future, and at
+   * most `reminderDays` away. A segment already past its date is stale cached
+   * data, not a reminder — flagging it would put a permanent red dot on an
+   * account whose numbers simply have not been refreshed. `expiresAt: null` means
+   * the segment never expires, so it never counts either.
+   */
+  function expiringCredits(segments, reminderDays, now = Date.now()) {
+    const horizon = now + reminderDays * 86400000;
+    return (Array.isArray(segments) ? segments : [])
+      .filter((segment) => {
+        if (!(Number(segment?.remaining) > 0)) return false;
+        const expiresAt = Date.parse(segment?.expiresAt ?? "");
+        return Number.isFinite(expiresAt) && expiresAt > now && expiresAt <= horizon;
+      })
+      .sort((left, right) => Date.parse(left.expiresAt) - Date.parse(right.expiresAt));
+  }
+
+  function creditDay(value) {
+    const parsed = new Date(value);
+    if (!value || Number.isNaN(parsed.getTime())) return "长期有效";
+    return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit" }).format(parsed);
+  }
+
+  function creditPopoverWhen(segment, urgent) {
+    if (!urgent) return creditDay(segment.expiresAt);
+    // Always at least one day: a segment expiring in an hour still rounds up.
+    return `还有 ${Math.ceil((Date.parse(segment.expiresAt) - Date.now()) / 86400000)} 天`;
+  }
+
+  function creditPopoverBlock(title, segments, { urgent = false, note = "" } = {}) {
+    const block = document.createElement("div");
+    block.className = urgent ? "te-cred-pop-block urgent" : "te-cred-pop-block";
+    const heading = document.createElement("div");
+    heading.className = "te-cred-pop-title";
+    heading.textContent = title;
+    block.appendChild(heading);
+    if (note) {
+      const hint = document.createElement("div");
+      hint.className = "te-cred-pop-note";
+      hint.textContent = note;
+      block.appendChild(hint);
+    }
+    if (!segments.length) {
+      const empty = document.createElement("div");
+      empty.className = "te-cred-pop-empty";
+      empty.textContent = "暂无积分明细";
+      block.appendChild(empty);
+      return block;
+    }
+    for (const segment of segments) {
+      const row = document.createElement("div");
+      row.className = "te-cred-pop-row";
+      const source = document.createElement("span");
+      source.className = "te-cred-pop-source";
+      source.textContent = segment.source || "积分";
+      source.title = source.textContent;
+      const amount = document.createElement("span");
+      amount.className = "te-cred-pop-amount";
+      amount.textContent = formatNumber(segment.remaining);
+      const when = document.createElement("span");
+      when.className = "te-cred-pop-when";
+      when.textContent = creditPopoverWhen(segment, urgent);
+      row.append(source, amount, when);
+      block.appendChild(row);
+    }
+    return block;
+  }
+
+  function renderCreditPopover(account) {
+    const credits = account?.insights?.credits;
+    const segments = accountCreditSegments(account);
+    const expiring = expiringCredits(segments, creditReminderDays);
+    creditPopover.replaceChildren();
+    const head = document.createElement("div");
+    head.className = "te-cred-pop-head";
+    head.textContent = account?.displayName || "TRAE account";
+    const total = document.createElement("span");
+    if (!credits) total.textContent = " 额度未同步";
+    else if (credits.unlimited) total.textContent = " 不限量";
+    else total.textContent = ` 剩余 ${formatNumber(credits.remaining)}`;
+    head.appendChild(total);
+    creditPopover.appendChild(head);
+    if (expiring.length) {
+      const urgent = expiring.reduce((sum, segment) => sum + Number(segment.remaining || 0), 0);
+      creditPopover.appendChild(
+        creditPopoverBlock("即将到期", expiring, {
+          urgent: true,
+          note: `共 ${formatNumber(urgent)} 分将在 ${creditReminderDays} 天内到期`,
+        }),
+      );
+    }
+    creditPopover.appendChild(creditPopoverBlock("全部构成", segments));
+  }
+
+  function closeCreditPopover() {
+    if (!creditPopoverAnchor) return;
+    creditPopoverAnchor.setAttribute("aria-expanded", "false");
+    creditPopoverAnchor = null;
+    creditPopover.hidden = true;
+  }
+
+  /**
+   * Places the popover against the icon it belongs to.
+   *
+   * Measured after it is laid out, because its height depends on how many
+   * segments the account has. Right-aligned to the icon and flipped above it when
+   * there is no room below, then clamped to the viewport.
+   */
+  function positionCreditPopover(anchor) {
+    const icon = anchor.getBoundingClientRect();
+    const pop = creditPopover.getBoundingClientRect();
+    const margin = 8;
+    const left = Math.max(
+      margin,
+      Math.min(icon.right - pop.width, window.innerWidth - pop.width - margin),
+    );
+    let top = icon.bottom + 6;
+    if (top + pop.height > window.innerHeight - margin) {
+      top = Math.max(margin, icon.top - pop.height - 6);
+    }
+    creditPopover.style.left = `${Math.round(left)}px`;
+    creditPopover.style.top = `${Math.round(top)}px`;
+  }
+
+  function toggleCreditPopover(button, account) {
+    if (creditPopoverAnchor === button) {
+      closeCreditPopover();
+      return;
+    }
+    closeCreditPopover();
+    creditPopoverAnchor = button;
+    button.setAttribute("aria-expanded", "true");
+    renderCreditPopover(account);
+    creditPopover.hidden = false;
+    positionCreditPopover(button);
+  }
+
   function renderAccounts(accounts, currentAccountId, currentAccountState) {
     list.replaceChildren();
+    // Every row this popover was anchored to is about to be detached, so close it
+    // rather than leave it floating over a list it no longer describes.
+    closeCreditPopover();
+    // Kept so a settings change can redraw the list from memory: the reminder
+    // threshold only changes how these same rows are flagged.
+    accountsView = { accounts, currentAccountId, currentAccountState };
     accountsById = new Map(accounts.map((account) => [account.id, account]));
     if (!accounts.length) {
       const empty = document.createElement("div");
@@ -2204,6 +2493,31 @@
 
       const ops = document.createElement("div");
       ops.className = "te-account-ops";
+
+      // Sits left of everything else in the row, including on the active account:
+      // its credits expire the same way and the popover is read-only anyway.
+      const creditsButton = document.createElement("button");
+      creditsButton.className = "te-icon-btn te-acc-credits";
+      creditsButton.type = "button";
+      creditsButton.title = "积分构成";
+      creditsButton.dataset.accountId = account.id;
+      creditsButton.setAttribute(
+        "aria-label",
+        `查看 ${account.displayName || "该账号"} 的积分构成`,
+      );
+      creditsButton.setAttribute("aria-expanded", "false");
+      creditsButton.innerHTML = `
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21.2 15.9A10 10 0 1 1 8.3 2.8"/>
+          <path d="M22 12A10 10 0 0 0 12 2v10z"/>
+        </svg>
+      `;
+      if (expiringCredits(accountCreditSegments(account), creditReminderDays).length) {
+        const dot = document.createElement("span");
+        dot.className = "te-cred-dot";
+        creditsButton.appendChild(dot);
+      }
+      ops.appendChild(creditsButton);
 
       let action;
       if (account.id === currentAccountId) {
@@ -2488,6 +2802,7 @@
     checkinBadge: settingsPane.querySelector(".te-checkin-badge"),
     checkinAuto: settingsPane.querySelector(".te-checkin-auto"),
     checkinInterval: settingsPane.querySelector(".te-checkin-interval"),
+    checkinReminder: settingsPane.querySelector(".te-checkin-reminder"),
     checkinClientLoad: settingsPane.querySelector(".te-checkin-clientload"),
     checkinStatus: settingsPane.querySelector(".te-checkin-status"),
     checkinSave: settingsPane.querySelector(".te-checkin-save"),
@@ -2618,9 +2933,20 @@
       settingsUi.checkinInterval.append(option);
     }
     settingsUi.checkinInterval.value = String(checkin.intervalMinutes);
+    // Same reason as the interval above: the allowed thresholds belong to the
+    // daemon, and a second copy here is how the two would drift apart.
+    settingsUi.checkinReminder.textContent = "";
+    for (const days of checkin.reminderOptions ?? []) {
+      const option = document.createElement("option");
+      option.value = String(days);
+      option.textContent = `${days} 天`;
+      settingsUi.checkinReminder.append(option);
+    }
+    settingsUi.checkinReminder.value = String(checkin.reminderDays);
     settingsUi.checkinAuto.value = checkin.auto ? "on" : "off";
     settingsUi.checkinClientLoad.value = checkin.onClientLoad ? "on" : "off";
     applyCheckinVisibility(checkin.auto);
+    applyCreditReminderDays(checkin);
 
     settingsUi.checkinBadge.className = `te-badge te-checkin-badge${checkin.auto ? " ok" : ""}`;
     settingsUi.checkinBadge.textContent = checkin.auto ? "已开启" : "已关闭";
@@ -2644,6 +2970,7 @@
       auto: settingsUi.checkinAuto.value === "on",
       intervalMinutes: Number(settingsUi.checkinInterval.value),
       onClientLoad: settingsUi.checkinClientLoad.value === "on",
+      reminderDays: Number(settingsUi.checkinReminder.value),
     };
     settingsUi.checkinSave.disabled = true;
     try {
@@ -2691,9 +3018,30 @@
     try {
       const data = await api("/api/settings");
       applyAboutCheckinText(data.checkin);
+      applyCreditReminderDays(data.checkin);
     } catch {
       // The generic wording stays; it is not worth an error in the panel footer.
     }
+  }
+
+  /**
+   * Keeps the account list's reminder threshold in step with the saved setting.
+   *
+   * The list paints before the settings are read, so the first pass uses the
+   * default. Repainting from the accounts already on screen is what makes a saved
+   * threshold take effect without reopening the panel, and it costs no request:
+   * the threshold is a view decision, not account state.
+   */
+  function applyCreditReminderDays(checkin) {
+    const days = Number(checkin?.reminderDays);
+    if (!Number.isFinite(days) || days === creditReminderDays) return;
+    creditReminderDays = days;
+    repaintAccounts();
+  }
+
+  function repaintAccounts() {
+    if (!accountsView) return;
+    renderAccounts(accountsView.accounts, accountsView.currentAccountId, accountsView.currentAccountState);
   }
 
   /* -----------------------------------------------------------------------
@@ -3565,6 +3913,20 @@
   }
   window.addEventListener(ACCOUNTS_UPDATED_EVENT, handleAccountsUpdated);
 
+  /**
+   * The launcher's way of speaking to a user whose window it could not bring to
+   * the front. One-shot with no retry, so a panel that happens to be closed is
+   * opened first — otherwise the toast would render inside a hidden panel and
+   * nothing would be seen at all.
+   */
+  function handleNotice(event) {
+    const message = event?.detail?.message;
+    if (!message) return;
+    if (!panel.classList.contains("open")) openPanel();
+    showToast(message, true);
+  }
+  window.addEventListener(NOTICE_EVENT, handleNotice);
+
   function failureDetails(result) {
     const failures = Array.isArray(result?.results)
       ? result.results.filter((entry) => entry && entry.ok === false && entry.error)
@@ -4281,6 +4643,12 @@
     });
   }
   list.addEventListener("click", (event) => {
+    const creditsButton = event.target.closest(".te-acc-credits");
+    if (creditsButton?.dataset.accountId) {
+      const account = accountsById.get(creditsButton.dataset.accountId);
+      if (account) toggleCreditPopover(creditsButton, account);
+      return;
+    }
     const deleteButton = event.target.closest(".te-acc-delete");
     if (deleteButton?.dataset.accountId) {
       const account = accountsById.get(deleteButton.dataset.accountId);
@@ -4296,6 +4664,32 @@
     if (!button?.dataset.accountId) return;
     switchAccount(button, button.dataset.accountId).catch(() => {});
   });
+  // Capture phase, so a click anywhere else closes the popover before whatever it
+  // was aimed at acts on it. The icon's own mousedown is ignored, otherwise the
+  // popover would close and reopen on the same click.
+  function handleCreditPopoverDismiss(event) {
+    if (!creditPopoverAnchor) return;
+    if (creditPopover.contains(event.target)) return;
+    if (event.target.closest?.(".te-acc-credits")) return;
+    closeCreditPopover();
+  }
+  function handleCreditPopoverEscape(event) {
+    if (event.key === "Escape") closeCreditPopover();
+  }
+  document.addEventListener("mousedown", handleCreditPopoverDismiss, true);
+  document.addEventListener("keydown", handleCreditPopoverEscape);
+  // A fixed-position popover does not follow its anchor, so a scroll of the list
+  // behind it would leave it pointing at the wrong row. Closing is the honest
+  // answer there — but the popover scrolls its own content as soon as an account
+  // has more segments than fit, and a capture-phase listener on the window sees
+  // that scroll too. Acting on it closed the popover the instant its scrollbar
+  // moved, which is what made the scrollbar impossible to drag.
+  function handleCreditPopoverScroll(event) {
+    if (creditPopover.contains(event.target)) return;
+    closeCreditPopover();
+  }
+  window.addEventListener("scroll", handleCreditPopoverScroll, true);
+  window.addEventListener("resize", closeCreditPopover);
   deleteMask.querySelector(".te-delete-cancel").addEventListener("click", closeDeleteDialog);
   deleteMask.querySelector(".te-delete-submit").addEventListener("click", () => {
     confirmDeleteAccount().catch(() => {});
@@ -4383,8 +4777,13 @@
     clearTimeout(toastTimer);
     clearTimeout(accountsUpdatedTimer);
     window.removeEventListener(ACCOUNTS_UPDATED_EVENT, handleAccountsUpdated);
+    window.removeEventListener(NOTICE_EVENT, handleNotice);
     window.removeEventListener(UPDATE_AVAILABLE_EVENT, handleUpdateAvailable);
     window.removeEventListener(UPDATE_PROGRESS_EVENT, handleUpdateProgressEvent);
+    document.removeEventListener("mousedown", handleCreditPopoverDismiss, true);
+    document.removeEventListener("keydown", handleCreditPopoverEscape);
+    window.removeEventListener("scroll", handleCreditPopoverScroll, true);
+    window.removeEventListener("resize", closeCreditPopover);
     stopOAuthPolling();
     stopFakeLogoutPolling();
     root.remove();

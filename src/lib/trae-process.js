@@ -282,6 +282,111 @@ export async function startTraeWithCdp(exePath, port) {
   return child.pid || null;
 }
 
+/**
+ * Brings the window of an already-running TRAE back to the front.
+ *
+ * PowerShell's own window handle for a process cannot be used for this: it only
+ * ever reports a *visible* top-level window, so it answers 0 in exactly the case
+ * this exists for — TRAE parked in the notification area with its window hidden.
+ * That window is still alive, so the work has to be done by enumerating every
+ * top-level window and keeping the ones owned by TRAE's own process ids.
+ *
+ * The returned `action` is more than a boolean on purpose. "A window is already in
+ * front", "the window was minimized", "the process owns no window at all" and "the
+ * probe itself failed" each call for a different response, and a boolean would
+ * collapse the two that matter into the same answer.
+ */
+export async function focusTraeWindow(exePath) {
+  const script = `
+    $target = ${psQuote(exePath)}
+    $pids = @(Get-Process -Name 'TRAE SOLO CN' -ErrorAction SilentlyContinue | Where-Object {
+      $_.Path -and $_.Path.Equals($target, [System.StringComparison]::OrdinalIgnoreCase)
+    } | Select-Object -ExpandProperty Id)
+    if (-not $pids.Count) { Write-Output 'no-process'; exit 0 }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+
+public class TraeWindowFocus {
+  public delegate bool EnumProc(IntPtr handle, IntPtr parameter);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc callback, IntPtr parameter);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr handle, out uint processId);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr handle);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr handle);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr handle, int command);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr handle);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr handle);
+  [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr handle);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr handle, System.Text.StringBuilder name, int maxCount);
+  // kernel32, not user32: declaring it against user32 throws at the call, which
+  // used to happen after the window had already been restored.
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
+
+  public static string Focus(uint[] processIds) {
+    List<IntPtr> owned = new List<IntPtr>();
+    IntPtr best = IntPtr.Zero;
+    int bestRank = 99;
+    TraeWindowFocus.EnumProc callback = delegate(IntPtr handle, IntPtr parameter) {
+      uint owner = 0;
+      GetWindowThreadProcessId(handle, out owner);
+      if (Array.IndexOf(processIds, owner) < 0) { return true; }
+      // The browser process also owns IME hosts, an input-method hint window and a
+      // GDI+ hook window, and several of those carry a title. The window class is
+      // what tells the real window apart: every TRAE window is a Chromium widget
+      // and none of the helpers is.
+      System.Text.StringBuilder className = new System.Text.StringBuilder(256);
+      GetClassName(handle, className, 256);
+      if (className.ToString() != "Chrome_WidgetWin_1") { return true; }
+      // A Chromium widget with no title is a helper window too, not the one a user
+      // means by "the TRAE window".
+      if (GetWindowTextLength(handle) == 0) { return true; }
+      owned.Add(handle);
+      int rank = 2;
+      if (IsWindowVisible(handle)) { rank = IsIconic(handle) ? 1 : 0; }
+      if (rank < bestRank) { bestRank = rank; best = handle; }
+      return true;
+    };
+    EnumWindows(callback, IntPtr.Zero);
+
+    if (owned.Count == 0) { return "no-window"; }
+    IntPtr foreground = GetForegroundWindow();
+    if (foreground != IntPtr.Zero && owned.Contains(foreground)) { return "already-foreground"; }
+
+    string action;
+    if (IsIconic(best)) { ShowWindow(best, 9); action = "restored"; }
+    else if (!IsWindowVisible(best)) { ShowWindow(best, 5); action = "shown"; }
+    else { action = "focused"; }
+
+    BringWindowToTop(best);
+    // SetForegroundWindow is refused unless the caller is allowed to take focus,
+    // and a process launched from a shortcut is not. Sharing an input queue with
+    // the thread that currently owns the foreground is the documented way around
+    // that, and it is what makes the window actually come forward.
+    uint foregroundThread = 0;
+    if (foreground != IntPtr.Zero) { GetWindowThreadProcessId(foreground, out foregroundThread); }
+    uint currentThread = GetCurrentThreadId();
+    bool attached = foregroundThread != 0 && foregroundThread != currentThread
+      && AttachThreadInput(currentThread, foregroundThread, true);
+    try { SetForegroundWindow(best); }
+    finally { if (attached) { AttachThreadInput(currentThread, foregroundThread, false); } }
+
+    return GetForegroundWindow() == best ? action : action + "-unfocused";
+  }
+}
+'@
+    [TraeWindowFocus]::Focus($pids)
+  `;
+  try {
+    const action = await runPowerShell(script, { timeout: 25000 });
+    return { action: action || "unavailable", error: null };
+  } catch (error) {
+    return { action: "unavailable", error: error?.message || String(error) };
+  }
+}
+
 export async function waitForCdp(port, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {

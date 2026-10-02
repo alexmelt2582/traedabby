@@ -21,6 +21,7 @@ import {
 import { AccountStore } from "./lib/accounts.js";
 import {
   CHECKIN_INTERVALS,
+  CREDIT_REMINDER_DAYS,
   configPath,
   loadAppConfig,
   normalizeAppUpdate,
@@ -261,6 +262,16 @@ const UPDATE_AVAILABLE_EVENT = "trae-enhancer:update-available";
 const UPDATE_PROGRESS_EVENT = "trae-enhancer:update-progress";
 
 /**
+ * One-off line the panel shows to the user.
+ *
+ * Only the launcher uses it, for the one thing it cannot say any other way: it
+ * runs without a console, so "the TRAE window could not be brought up" would
+ * otherwise be invisible. Nothing is stored — a panel that is not open simply
+ * misses it, which is why the panel opens itself when this arrives.
+ */
+const NOTICE_EVENT = "trae-enhancer:notice";
+
+/**
  * Tells the injected panel that account state changed on disk.
  *
  * The panel is a pure view — it never derives check-in state itself — so this is
@@ -305,15 +316,17 @@ async function notifyPanel(cdpClient, event, detail) {
 /**
  * Automatic check-in as the panel renders it.
  *
- * `options` is published from here rather than hard-coded in the panel, so the
- * allowed intervals cannot drift between the two.
+ * `options` and `reminderOptions` are published from here rather than hard-coded
+ * in the panel, so the allowed values cannot drift between the two.
  */
 function checkinSettingsPayload(checkin) {
   return {
     auto: checkin.auto,
     intervalMinutes: checkin.intervalMinutes,
     onClientLoad: checkin.onClientLoad,
+    reminderDays: checkin.reminderDays,
     options: [...CHECKIN_INTERVALS],
+    reminderOptions: [...CREDIT_REMINDER_DAYS],
   };
 }
 
@@ -462,12 +475,18 @@ async function checkForAppUpdate({ force = false } = {}) {
       return { ...appUpdatePayload(), cached: false };
     } catch (error) {
       const message = error?.message || String(error);
+      // The panel is a product surface, so it never gets the transport's own words:
+      // `GET https://api.github.com/repos/<repo>/releases/latest 超时（15000ms）`
+      // names an internal address and a socket budget, and neither is something a
+      // user can act on. Every failed check reads the same there — it could not
+      // reach the network — while the full chain goes to the log, the one place a
+      // real cause can be read.
       // The previously found release is kept: a failed re-check is not evidence
       // that the update went away, and dropping it would hide a known one.
       appUpdateState = {
         checkedAt: new Date().toISOString(),
         latest: appUpdateState.latest,
-        error: message,
+        error: "网络连接失败",
       };
       console.warn(`[update] check failed: ${message}`);
       return { ...appUpdatePayload(), cached: false };
@@ -2073,20 +2092,21 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
     const body = await readRequestBody(request);
     const current = await loadAppConfig(DATA_DIR);
     // Every field is optional and an omitted one keeps its current value: the
-    // panel submits the three controls as one form, but a partial request must
-    // not quietly reset the rest to the defaults.
+    // panel submits the whole card as one form, but a partial request must not
+    // quietly reset the rest to the defaults.
     const checkin = normalizeCheckin({
       ...current.checkin,
       ...(body?.auto === undefined ? {} : { auto: body.auto }),
       ...(body?.intervalMinutes === undefined ? {} : { intervalMinutes: body.intervalMinutes }),
       ...(body?.onClientLoad === undefined ? {} : { onClientLoad: body.onClientLoad }),
+      ...(body?.reminderDays === undefined ? {} : { reminderDays: body.reminderDays }),
     });
     await saveAppConfig(DATA_DIR, { checkin });
     // This takes effect in the running process: the schedule is rebuilt here,
     // and every later trigger re-reads the configuration. No restart notice.
     rescheduleAutoCheckin?.({ initialRun: false });
     console.log(
-      `[settings] checkin auto=${checkin.auto} interval=${checkin.intervalMinutes} onClientLoad=${checkin.onClientLoad}`,
+      `[settings] checkin auto=${checkin.auto} interval=${checkin.intervalMinutes} onClientLoad=${checkin.onClientLoad} reminderDays=${checkin.reminderDays}`,
     );
     jsonResponse(response, 200, { ok: true, checkin: checkinSettingsPayload(checkin) });
     return;
@@ -2095,6 +2115,26 @@ async function route(request, response, apiToken, cdpClient, oauthManager, fakeL
   if (request.method === "POST" && pathname === "/api/daemon/restart") {
     const result = scheduleDaemonRestart();
     jsonResponse(response, 200, { ok: true, ...result });
+    return;
+  }
+
+  /**
+   * Relays one line from the launcher to the panel as a toast.
+   *
+   * A push, never state: nothing is written down, so a panel that is not open at
+   * that moment loses the message instead of finding it stale the next time it is
+   * opened. The launcher is the only caller, and it reports whether the CDP
+   * connection was there to deliver it.
+   */
+  if (request.method === "POST" && pathname === "/api/notice") {
+    const body = await readRequestBody(request);
+    const message = typeof body?.message === "string" ? body.message.trim() : "";
+    if (!message) {
+      jsonResponse(response, 400, { ok: false, error: "message is required" });
+      return;
+    }
+    const delivered = await notifyPanel(cdpClient, NOTICE_EVENT, { message });
+    jsonResponse(response, 200, { ok: true, delivered });
     return;
   }
 

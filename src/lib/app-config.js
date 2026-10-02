@@ -92,7 +92,20 @@ export function normalizeTraeUpdate(raw) {
  * is echoed back to the panel on every read, so a fallback is never hidden.
  */
 export const CHECKIN_INTERVALS = [15, 30, 60, 120];
-export const CHECKIN_DEFAULTS = { auto: true, intervalMinutes: 30, onClientLoad: true };
+export const CHECKIN_DEFAULTS = {
+  auto: true,
+  intervalMinutes: 30,
+  onClientLoad: true,
+  // How many days ahead of its expiry a credit segment starts being flagged in
+  // the account list. It lives in the check-in block because the panel renders it
+  // inside the check-in card, next to the sweep interval: both answer "when does
+  // this helper act on its own". The name keeps the subject explicit, because the
+  // reminder is about credits, not about check-in.
+  reminderDays: 7,
+};
+
+/** The reminder thresholds the panel offers, in days. */
+export const CREDIT_REMINDER_DAYS = [1, 3, 7, 14, 30];
 
 function normalizeCheckinFlag(value, fallback) {
   if (value === null || value === undefined) return fallback;
@@ -110,6 +123,11 @@ export function normalizeCheckinInterval(value) {
   return CHECKIN_INTERVALS.includes(numeric) ? numeric : CHECKIN_DEFAULTS.intervalMinutes;
 }
 
+export function normalizeReminderDays(value) {
+  const numeric = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
+  return CREDIT_REMINDER_DAYS.includes(numeric) ? numeric : CHECKIN_DEFAULTS.reminderDays;
+}
+
 export function normalizeCheckin(raw) {
   if (raw === null || raw === undefined) return { ...CHECKIN_DEFAULTS };
   if (typeof raw !== "object" || Array.isArray(raw)) {
@@ -119,6 +137,7 @@ export function normalizeCheckin(raw) {
     auto: normalizeCheckinFlag(raw.auto, CHECKIN_DEFAULTS.auto),
     intervalMinutes: normalizeCheckinInterval(raw.intervalMinutes),
     onClientLoad: normalizeCheckinFlag(raw.onClientLoad, CHECKIN_DEFAULTS.onClientLoad),
+    reminderDays: normalizeReminderDays(raw.reminderDays),
   };
 }
 

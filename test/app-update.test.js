@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   GITHUB_API_ORIGIN,
@@ -10,6 +13,11 @@ import {
   parseVersion,
   selectInstallerAsset,
 } from "../src/lib/app-update.js";
+
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+const read = (relative) => fs.readFileSync(path.join(ROOT, relative), "utf8");
+const daemonSource = read("src/daemon.js");
+const injectSource = read("src/ui/inject.js");
 
 const RELEASE = {
   tag_name: "v1.2.0",
@@ -238,4 +246,30 @@ test("an unset repository is refused before any request is made", async () => {
     /未配置 GitHub 仓库/,
   );
   assert.equal(called, false);
+});
+
+test("a failed update check never puts the address on the panel", () => {
+  // `requestJson` writes its failures as `GET <url> 超时（15000ms）` or
+  // `GET <url> 失败 → <cause chain>`, both of which name an internal endpoint and
+  // the machine's own transport. The panel is a product surface and gets neither:
+  // every failed check reads the same there, and the log keeps the chain.
+  const body = daemonSource.match(/async function checkForAppUpdate\([\s\S]*?\n\}/);
+  assert.ok(body, "checkForAppUpdate was not found");
+  assert.match(body[0], /error: "网络连接失败",/);
+  // Nothing else may be assigned to `error`: a fallback to the raw message would
+  // put the address straight back on the panel.
+  assert.doesNotMatch(body[0], /error:\s*(?:panelError|message)/);
+  // The full message still has to land somewhere, or a real failure becomes
+  // unfalsifiable — it goes to the daemon log and only there.
+  assert.match(body[0], /console\.warn\(`\[update\] check failed: \$\{message\}`\)/);
+});
+
+test("the panel prints the update error it was given and no address of its own", () => {
+  // Whatever the daemon put in `error` is what the panel prints, so the sentence
+  // arrives as-is. The address has no other way in: the panel must not render
+  // `repo` or any github.com link of its own.
+  assert.match(injectSource, /上次检查失败：\$\{update\.error\}/);
+  assert.doesNotMatch(injectSource, /\.repo\b/);
+  assert.doesNotMatch(injectSource, /github\.com/);
+  assert.doesNotMatch(injectSource, /latest\?\.url|latest\.url\b/);
 });
