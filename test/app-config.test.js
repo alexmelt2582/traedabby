@@ -9,6 +9,7 @@ import {
   CHECKIN_DEFAULTS,
   CHECKIN_INTERVALS,
   CONFIG_FILE_NAME,
+  CREDIT_REMINDER_DAYS,
   PROXY_DEFAULTS,
   configPath,
   loadAppConfig,
@@ -17,6 +18,7 @@ import {
   normalizeCheckinInterval,
   normalizeConfig,
   normalizeProxy,
+  normalizeReminderDays,
   normalizeTraeExe,
   normalizeTraeUpdate,
   saveAppConfig,
@@ -99,10 +101,26 @@ test("a bad check-in entry falls back instead of failing the whole file", () => 
     auto: false,
     intervalMinutes: 60,
     onClientLoad: false,
+    reminderDays: 7,
   });
   // The container itself stays strict: a string here means the file is structurally wrong.
   assert.throws(() => normalizeCheckin([]), /must be a JSON object/);
   assert.throws(() => normalizeCheckin("on"), /must be a JSON object/);
+});
+
+test("the credit reminder threshold is limited to the offered values", () => {
+  assert.deepEqual(CREDIT_REMINDER_DAYS, [1, 3, 7, 14, 30]);
+  assert.equal(CHECKIN_DEFAULTS.reminderDays, 7);
+  for (const days of CREDIT_REMINDER_DAYS) {
+    assert.equal(normalizeReminderDays(days), days);
+    // A string is accepted too: the value arrives back through JSON.
+    assert.equal(normalizeReminderDays(String(days)), days);
+  }
+  for (const value of [0, 2, 6, 8, 90, 7.5, "abc", "", null, undefined, true, [], {}]) {
+    assert.equal(normalizeReminderDays(value), CHECKIN_DEFAULTS.reminderDays);
+  }
+  assert.equal(normalizeCheckin({ reminderDays: 30 }).reminderDays, 30);
+  assert.equal(normalizeCheckin({ reminderDays: "abc" }).reminderDays, 7);
 });
 
 test("a configuration written before the check-in block existed gains the defaults", () => {

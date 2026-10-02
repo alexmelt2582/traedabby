@@ -19,6 +19,7 @@ import {
   resolveTraeExe,
 } from "./lib/trae-locate.js";
 import {
+  focusTraeWindow,
   isTraeCdpAvailable,
   startTraeWithCdp,
   stopTraeForRestart,
@@ -93,6 +94,78 @@ async function startDaemon() {
   throw new Error(`Timed out waiting for the local daemon on port ${uiPort}`);
 }
 
+/**
+ * Hands one line to the injected panel for it to show as a toast.
+ *
+ * The shortcut is launched without a console, so a failure on this path has
+ * nowhere else to appear; the daemon holds the only CDP connection that can reach
+ * the panel, so the message travels through it. Never throws: a notice that could
+ * not be delivered must not turn a focus problem into a failed launch.
+ */
+async function notifyPanel(dataDirPath, token, message) {
+  try {
+    await fetch(`http://${LOOPBACK_HOST}:${uiPort}/api/notice`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-trae-enhancer-token": token,
+      },
+      body: JSON.stringify({ message }),
+    });
+  } catch (error) {
+    console.warn(`[${APP_NAME}] the notice could not be delivered: ${error?.message || error}`);
+  }
+}
+
+/**
+ * The visible result of clicking the shortcut while TRAE is already running.
+ *
+ * Until now that click did nothing at all: the CDP check passed, the panel was
+ * already injected, and the launcher exited without touching a window. Restoring
+ * the window is the whole point of the click, so it happens here.
+ *
+ * It runs *after* injection so that a failure has a panel to report into. Nothing
+ * here throws — a window that could not be raised is not a failed launch, and
+ * reporting it as one would make the shortcut look broken in a way it is not.
+ */
+async function focusExistingWindow(exePath, dataDirPath, token) {
+  const focus = await focusTraeWindow(exePath);
+  if (focus.action !== "no-window" && focus.action !== "unavailable") {
+    console.log(`[${APP_NAME}] window focus: ${focus.action}`);
+    return;
+  }
+
+  if (focus.action === "no-window") {
+    // The process is alive but owns no window at all, so there is nothing to
+    // restore. Asking the running instance for a new window is the only way to
+    // put something on screen, and the single-instance lock keeps this from
+    // starting a second TRAE.
+    console.log(`[${APP_NAME}] TRAE owns no window; asking the running instance for one...`);
+    await startTraeWithCdp(exePath, cdpPort);
+    // The request only asks Chromium to create the window; it still has to be
+    // created and shown. Sampling once at a fixed delay made a slow start look
+    // like a failure and told the user to go find TRAE in the taskbar — while the
+    // window was already on screen. Waiting for a window to appear is the
+    // question that was actually being asked.
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      await delay(700);
+      const retry = await focusTraeWindow(exePath);
+      if (retry.action !== "no-window" && retry.action !== "unavailable") {
+        console.log(`[${APP_NAME}] window focus retry: ${retry.action}`);
+        return;
+      }
+    }
+    console.log(`[${APP_NAME}] window focus retry: still no window`);
+  }
+
+  await notifyPanel(
+    dataDirPath,
+    token,
+    "没能把 TRAE 窗口调到最前面，请到任务栏点一下 TRAE。",
+  );
+}
+
 async function main() {
   const resolved = await resolveTraeExe({
     dataDir,
@@ -107,7 +180,11 @@ async function main() {
     `[${APP_NAME}] TRAE: ${exePath} (来源: ${SOURCES[resolved.source] ?? resolved.source})`,
   );
 
-  let cdpReady = await isTraeCdpAvailable(cdpPort);
+  // Whether TRAE was already up decides what the click means. A restart or a cold
+  // start puts a window on screen by itself, so only the already-running case has
+  // to be brought forward explicitly.
+  const alreadyRunning = await isTraeCdpAvailable(cdpPort);
+  let cdpReady = alreadyRunning;
   if (!cdpReady && noRestart) {
     throw new Error(
       `TRAE SOLO CN is not exposing CDP port ${cdpPort}. Start it through this launcher.`,
@@ -144,6 +221,8 @@ async function main() {
   if (lastInjectStatus !== 200) {
     throw new Error(`Failed to inject the enhancer UI: HTTP ${lastInjectStatus}`);
   }
+
+  if (alreadyRunning) await focusExistingWindow(exePath, dataDir, token);
 
   console.log(`[${APP_NAME}] Ready: http://${LOOPBACK_HOST}:${uiPort}`);
   console.log(`[${APP_NAME}] CDP: http://${LOOPBACK_HOST}:${cdpPort}`);

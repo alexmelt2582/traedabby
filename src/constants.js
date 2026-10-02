@@ -3,7 +3,7 @@ import path from "node:path";
 import { APP_ROOT } from "./lib/app-paths.js";
 
 export const APP_NAME = "TRAE SOLO CN Enhancer";
-export const APP_VERSION = "1.3.0";
+export const APP_VERSION = "1.4.0";
 export const PROJECT_ROOT = APP_ROOT;
 
 /**

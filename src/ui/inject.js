@@ -14,6 +14,15 @@
   // the About tab can show the dot without the panel ever polling GitHub (the
   // workbench CSP would block that request anyway).
   const UPDATE_AVAILABLE_EVENT = "trae-enhancer:update-available";
+  // Dispatched by the daemon while an in-app upgrade is downloading or verifying.
+  // The upgrade request stays open for the whole download, so without this the
+  // panel could only show one frozen line until it finished.
+  const UPDATE_PROGRESS_EVENT = "trae-enhancer:update-progress";
+  // Dispatched by the daemon on behalf of another process that has something to
+  // tell the user, such as the launcher failing to bring TRAE to the front. It is
+  // one-shot: the panel may well be closed when it arrives, so the handler opens
+  // it before showing the toast.
+  const NOTICE_EVENT = "trae-enhancer:notice";
 
   window.__traeEnhancerCleanup?.();
   document.getElementById(ROOT_ID)?.remove();
@@ -704,6 +713,114 @@
       white-space: nowrap;
     }
 
+    #${ROOT_ID} .te-acc-credits {
+      position: relative;
+    }
+
+    #${ROOT_ID} .te-cred-dot {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #ef4444;
+      box-shadow: 0 0 0 2px var(--te-panel-solid);
+    }
+
+    /* Anchored to the icon but parented to the root, so a long list can never be
+       clipped by the scrolling account area. */
+    #${ROOT_ID} .te-cred-pop {
+      position: fixed;
+      z-index: 2147483646;
+      width: 262px;
+      max-height: 330px;
+      overflow: auto;
+      padding: 10px 11px;
+      border: 1px solid var(--te-border);
+      border-radius: 10px;
+      background: var(--te-panel-solid);
+      color: var(--te-text);
+      box-shadow: 0 14px 34px rgba(0, 0, 0, .3);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    #${ROOT_ID} .te-cred-pop-head {
+      margin-bottom: 6px;
+      font-size: 11.5px;
+      font-weight: 650;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #${ROOT_ID} .te-cred-pop-head span {
+      color: var(--te-muted);
+      font-weight: 500;
+    }
+
+    #${ROOT_ID} .te-cred-pop-block {
+      margin-top: 7px;
+    }
+
+    #${ROOT_ID} .te-cred-pop-block.urgent {
+      padding: 7px 8px 5px;
+      border: 1px solid color-mix(in srgb, #f59e0b 45%, transparent);
+      border-radius: 7px;
+      background: color-mix(in srgb, #f59e0b 9%, transparent);
+    }
+
+    #${ROOT_ID} .te-cred-pop-title {
+      color: var(--te-muted);
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: .05em;
+    }
+
+    #${ROOT_ID} .te-cred-pop-note {
+      margin-top: 2px;
+      color: #f59e0b;
+      font-size: 10px;
+    }
+
+    #${ROOT_ID} .te-cred-pop-row {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 2px 0;
+    }
+
+    #${ROOT_ID} .te-cred-pop-source {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #${ROOT_ID} .te-cred-pop-amount {
+      flex: 0 0 auto;
+      font-weight: 650;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #${ROOT_ID} .te-cred-pop-when {
+      flex: 0 0 auto;
+      color: var(--te-muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    #${ROOT_ID} .te-cred-pop-block.urgent .te-cred-pop-when {
+      color: #f59e0b;
+      font-weight: 650;
+    }
+
+    #${ROOT_ID} .te-cred-pop-empty {
+      padding: 6px 0 2px;
+      color: var(--te-muted);
+    }
+
     #${ROOT_ID} .te-empty {
       padding: 30px 18px;
       text-align: center;
@@ -957,6 +1074,28 @@
       justify-content: flex-end;
       gap: 8px;
       margin-top: 16px;
+    }
+
+    /* The upgrade progress bar. The track is the border colour so it stays legible
+       on both the light and the dark workbench without naming any colour twice. */
+    #${ROOT_ID} .te-install-bar {
+      height: 6px;
+      margin-top: 12px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: color-mix(in srgb, var(--te-border) 70%, transparent);
+    }
+
+    #${ROOT_ID} .te-install-bar-fill {
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--te-accent);
+      transition: width .2s cubic-bezier(.16,1,.3,1);
+    }
+
+    #${ROOT_ID} .te-install-bar[hidden] {
+      display: none;
     }
 
     #${ROOT_ID} .te-spinner {
@@ -1251,6 +1390,7 @@
     #${ROOT_ID} .te-danger:disabled { opacity: .5; }
     #${ROOT_ID} .te-acc-delete:hover { color: #ef4444; }
     #${ROOT_ID} .te-acc-renew:hover { color: var(--te-accent); }
+    #${ROOT_ID} .te-acc-credits:hover { color: var(--te-accent); }
 
     /* Update card. The version itself lives in the hero above, so this card only
        reports status and what to do about it. */
@@ -1486,8 +1626,9 @@
         <p class="te-update-state"></p>
         <div class="te-update-notes" hidden></div>
         <ol class="te-update-steps" hidden>
-          <li>点「立即升级」打开下载页，把新版装好。</li>
-          <li>回到 TRAE 点「重载界面」，面板就会换成新版。</li>
+          <li>点「立即升级」：助手会下载并校验新版，然后自动安装，全程不用离开 TRAE。</li>
+          <li>安装时助手服务要重启，面板会短暂消失，装好后自动回来。</li>
+          <li>万一没回来，重新打开一次桌面快捷方式即可。</li>
         </ol>
         <div class="te-update-actions">
           <button class="te-primary te-update-open" type="button" hidden>立即升级</button>
@@ -1579,6 +1720,13 @@
                   <span class="te-set-hint">每隔多久扫一次，发现还没领的账号就补上</span>
                 </span>
                 <select class="te-select te-checkin-interval"></select>
+              </label>
+              <label class="te-set-row">
+                <span class="te-set-text">
+                  <span class="te-set-name">积分到期提醒</span>
+                  <span class="te-set-hint">快到期时在账号列表标个红点，点积分图标看明细</span>
+                </span>
+                <select class="te-select te-checkin-reminder"></select>
               </label>
               <label class="te-set-row">
                 <span class="te-set-text">
@@ -1764,6 +1912,12 @@
   const toast = document.createElement("div");
   toast.className = "te-toast";
 
+  // Parented to the root rather than to the panel: the panel scrolls and clips,
+  // and a popover anchored to a row inside it would be cut off at the edge.
+  const creditPopover = document.createElement("div");
+  creditPopover.className = "te-cred-pop";
+  creditPopover.hidden = true;
+
   panel.append(header, tabs, content, footer, toast);
 
   const oauthMask = document.createElement("div");
@@ -1834,6 +1988,38 @@
     </div>
   `;
 
+  /**
+   * The upgrade progress box.
+   *
+   * It is a modal rather than a line inside the About card because the download
+   * takes minutes and the card sits at the bottom of a scrollable page: the user
+   * asked for the upgrade and needs to see that it is happening, not to keep an
+   * eye on one line of text. The mask also has no dismiss path while an upgrade
+   * is running — the one thing that must not happen is the user losing track of
+   * an install that is already writing to disk.
+   */
+  const installMask = document.createElement("div");
+  installMask.className = "te-modal-mask";
+  installMask.innerHTML = `
+    <div class="te-modal" role="dialog" aria-modal="true" aria-label="升级助手">
+      <div class="te-modal-title te-install-title"></div>
+      <div class="te-modal-status te-install-status"></div>
+      <div class="te-install-bar" hidden><div class="te-install-bar-fill"></div></div>
+      <div class="te-modal-actions">
+        <button class="te-secondary te-install-close" type="button" hidden>关闭</button>
+        <button class="te-primary te-install-retry" type="button" hidden>重试</button>
+      </div>
+    </div>
+  `;
+  const installUi = {
+    title: installMask.querySelector(".te-install-title"),
+    status: installMask.querySelector(".te-install-status"),
+    bar: installMask.querySelector(".te-install-bar"),
+    fill: installMask.querySelector(".te-install-bar-fill"),
+    close: installMask.querySelector(".te-install-close"),
+    retry: installMask.querySelector(".te-install-retry"),
+  };
+
   const importFileInput = document.createElement("input");
   importFileInput.type = "file";
   importFileInput.accept = ".json,application/json";
@@ -1851,7 +2037,17 @@
     </svg>
   `;
 
-  root.append(panel, loginChoiceMask, oauthMask, transferMask, deleteMask, importFileInput, fab);
+  root.append(
+    panel,
+    loginChoiceMask,
+    oauthMask,
+    transferMask,
+    deleteMask,
+    installMask,
+    creditPopover,
+    importFileInput,
+    fab,
+  );
   document.body.appendChild(root);
 
   let toastTimer = null;
@@ -1875,6 +2071,16 @@
   // here so the empty state can say it instead of looking like "no accounts yet".
   let adoptionError = null;
   let accountsById = new Map();
+  // The last painted account list, kept so a settings change can redraw it
+  // without asking the daemon for the same payload again.
+  let accountsView = null;
+  // How many days ahead of expiry a credit segment starts being flagged. The
+  // daemon owns the value; this only holds the last one it reported, and the
+  // default matches the daemon's so the first paint is not wrong either.
+  let creditReminderDays = 7;
+  // The icon whose popover is currently open, or null. Held as the element rather
+  // than an id so a repaint that detaches it closes the popover with it.
+  let creditPopoverAnchor = null;
   let deleteAccountId = null;
   let deleteAccountName = "";
 
@@ -1906,7 +2112,18 @@
       },
     }).then(async (response) => {
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      if (!response.ok) {
+        const error = new Error(data.error || `HTTP ${response.status}`);
+        /**
+         * The daemon's own error codes are carried through so a caller can act on
+         * what happened instead of on the sentence describing it. `install-in-flight`
+         * is the one that matters here: an upgrade already running is progress, not
+         * a failure, and matching Chinese text to tell them apart would break the
+         * moment either string is reworded.
+         */
+        if (typeof data.code === "string") error.code = data.code;
+        throw error;
+      }
       return data;
     });
   }
@@ -2071,8 +2288,159 @@
     };
   }
 
+  function accountCreditSegments(account) {
+    const segments = account?.insights?.credits?.segments;
+    return Array.isArray(segments) ? segments : [];
+  }
+
+  /**
+   * The credit segments that expire inside the reminder window.
+   *
+   * Deliberately narrow: something left to use, an expiry in the future, and at
+   * most `reminderDays` away. A segment already past its date is stale cached
+   * data, not a reminder — flagging it would put a permanent red dot on an
+   * account whose numbers simply have not been refreshed. `expiresAt: null` means
+   * the segment never expires, so it never counts either.
+   */
+  function expiringCredits(segments, reminderDays, now = Date.now()) {
+    const horizon = now + reminderDays * 86400000;
+    return (Array.isArray(segments) ? segments : [])
+      .filter((segment) => {
+        if (!(Number(segment?.remaining) > 0)) return false;
+        const expiresAt = Date.parse(segment?.expiresAt ?? "");
+        return Number.isFinite(expiresAt) && expiresAt > now && expiresAt <= horizon;
+      })
+      .sort((left, right) => Date.parse(left.expiresAt) - Date.parse(right.expiresAt));
+  }
+
+  function creditDay(value) {
+    const parsed = new Date(value);
+    if (!value || Number.isNaN(parsed.getTime())) return "长期有效";
+    return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit" }).format(parsed);
+  }
+
+  function creditPopoverWhen(segment, urgent) {
+    if (!urgent) return creditDay(segment.expiresAt);
+    // Always at least one day: a segment expiring in an hour still rounds up.
+    return `还有 ${Math.ceil((Date.parse(segment.expiresAt) - Date.now()) / 86400000)} 天`;
+  }
+
+  function creditPopoverBlock(title, segments, { urgent = false, note = "" } = {}) {
+    const block = document.createElement("div");
+    block.className = urgent ? "te-cred-pop-block urgent" : "te-cred-pop-block";
+    const heading = document.createElement("div");
+    heading.className = "te-cred-pop-title";
+    heading.textContent = title;
+    block.appendChild(heading);
+    if (note) {
+      const hint = document.createElement("div");
+      hint.className = "te-cred-pop-note";
+      hint.textContent = note;
+      block.appendChild(hint);
+    }
+    if (!segments.length) {
+      const empty = document.createElement("div");
+      empty.className = "te-cred-pop-empty";
+      empty.textContent = "暂无积分明细";
+      block.appendChild(empty);
+      return block;
+    }
+    for (const segment of segments) {
+      const row = document.createElement("div");
+      row.className = "te-cred-pop-row";
+      const source = document.createElement("span");
+      source.className = "te-cred-pop-source";
+      source.textContent = segment.source || "积分";
+      source.title = source.textContent;
+      const amount = document.createElement("span");
+      amount.className = "te-cred-pop-amount";
+      amount.textContent = formatNumber(segment.remaining);
+      const when = document.createElement("span");
+      when.className = "te-cred-pop-when";
+      when.textContent = creditPopoverWhen(segment, urgent);
+      row.append(source, amount, when);
+      block.appendChild(row);
+    }
+    return block;
+  }
+
+  function renderCreditPopover(account) {
+    const credits = account?.insights?.credits;
+    const segments = accountCreditSegments(account);
+    const expiring = expiringCredits(segments, creditReminderDays);
+    creditPopover.replaceChildren();
+    const head = document.createElement("div");
+    head.className = "te-cred-pop-head";
+    head.textContent = account?.displayName || "TRAE account";
+    const total = document.createElement("span");
+    if (!credits) total.textContent = " 额度未同步";
+    else if (credits.unlimited) total.textContent = " 不限量";
+    else total.textContent = ` 剩余 ${formatNumber(credits.remaining)}`;
+    head.appendChild(total);
+    creditPopover.appendChild(head);
+    if (expiring.length) {
+      const urgent = expiring.reduce((sum, segment) => sum + Number(segment.remaining || 0), 0);
+      creditPopover.appendChild(
+        creditPopoverBlock("即将到期", expiring, {
+          urgent: true,
+          note: `共 ${formatNumber(urgent)} 分将在 ${creditReminderDays} 天内到期`,
+        }),
+      );
+    }
+    creditPopover.appendChild(creditPopoverBlock("全部构成", segments));
+  }
+
+  function closeCreditPopover() {
+    if (!creditPopoverAnchor) return;
+    creditPopoverAnchor.setAttribute("aria-expanded", "false");
+    creditPopoverAnchor = null;
+    creditPopover.hidden = true;
+  }
+
+  /**
+   * Places the popover against the icon it belongs to.
+   *
+   * Measured after it is laid out, because its height depends on how many
+   * segments the account has. Right-aligned to the icon and flipped above it when
+   * there is no room below, then clamped to the viewport.
+   */
+  function positionCreditPopover(anchor) {
+    const icon = anchor.getBoundingClientRect();
+    const pop = creditPopover.getBoundingClientRect();
+    const margin = 8;
+    const left = Math.max(
+      margin,
+      Math.min(icon.right - pop.width, window.innerWidth - pop.width - margin),
+    );
+    let top = icon.bottom + 6;
+    if (top + pop.height > window.innerHeight - margin) {
+      top = Math.max(margin, icon.top - pop.height - 6);
+    }
+    creditPopover.style.left = `${Math.round(left)}px`;
+    creditPopover.style.top = `${Math.round(top)}px`;
+  }
+
+  function toggleCreditPopover(button, account) {
+    if (creditPopoverAnchor === button) {
+      closeCreditPopover();
+      return;
+    }
+    closeCreditPopover();
+    creditPopoverAnchor = button;
+    button.setAttribute("aria-expanded", "true");
+    renderCreditPopover(account);
+    creditPopover.hidden = false;
+    positionCreditPopover(button);
+  }
+
   function renderAccounts(accounts, currentAccountId, currentAccountState) {
     list.replaceChildren();
+    // Every row this popover was anchored to is about to be detached, so close it
+    // rather than leave it floating over a list it no longer describes.
+    closeCreditPopover();
+    // Kept so a settings change can redraw the list from memory: the reminder
+    // threshold only changes how these same rows are flagged.
+    accountsView = { accounts, currentAccountId, currentAccountState };
     accountsById = new Map(accounts.map((account) => [account.id, account]));
     if (!accounts.length) {
       const empty = document.createElement("div");
@@ -2125,6 +2493,31 @@
 
       const ops = document.createElement("div");
       ops.className = "te-account-ops";
+
+      // Sits left of everything else in the row, including on the active account:
+      // its credits expire the same way and the popover is read-only anyway.
+      const creditsButton = document.createElement("button");
+      creditsButton.className = "te-icon-btn te-acc-credits";
+      creditsButton.type = "button";
+      creditsButton.title = "积分构成";
+      creditsButton.dataset.accountId = account.id;
+      creditsButton.setAttribute(
+        "aria-label",
+        `查看 ${account.displayName || "该账号"} 的积分构成`,
+      );
+      creditsButton.setAttribute("aria-expanded", "false");
+      creditsButton.innerHTML = `
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21.2 15.9A10 10 0 1 1 8.3 2.8"/>
+          <path d="M22 12A10 10 0 0 0 12 2v10z"/>
+        </svg>
+      `;
+      if (expiringCredits(accountCreditSegments(account), creditReminderDays).length) {
+        const dot = document.createElement("span");
+        dot.className = "te-cred-dot";
+        creditsButton.appendChild(dot);
+      }
+      ops.appendChild(creditsButton);
 
       let action;
       if (account.id === currentAccountId) {
@@ -2409,6 +2802,7 @@
     checkinBadge: settingsPane.querySelector(".te-checkin-badge"),
     checkinAuto: settingsPane.querySelector(".te-checkin-auto"),
     checkinInterval: settingsPane.querySelector(".te-checkin-interval"),
+    checkinReminder: settingsPane.querySelector(".te-checkin-reminder"),
     checkinClientLoad: settingsPane.querySelector(".te-checkin-clientload"),
     checkinStatus: settingsPane.querySelector(".te-checkin-status"),
     checkinSave: settingsPane.querySelector(".te-checkin-save"),
@@ -2539,9 +2933,20 @@
       settingsUi.checkinInterval.append(option);
     }
     settingsUi.checkinInterval.value = String(checkin.intervalMinutes);
+    // Same reason as the interval above: the allowed thresholds belong to the
+    // daemon, and a second copy here is how the two would drift apart.
+    settingsUi.checkinReminder.textContent = "";
+    for (const days of checkin.reminderOptions ?? []) {
+      const option = document.createElement("option");
+      option.value = String(days);
+      option.textContent = `${days} 天`;
+      settingsUi.checkinReminder.append(option);
+    }
+    settingsUi.checkinReminder.value = String(checkin.reminderDays);
     settingsUi.checkinAuto.value = checkin.auto ? "on" : "off";
     settingsUi.checkinClientLoad.value = checkin.onClientLoad ? "on" : "off";
     applyCheckinVisibility(checkin.auto);
+    applyCreditReminderDays(checkin);
 
     settingsUi.checkinBadge.className = `te-badge te-checkin-badge${checkin.auto ? " ok" : ""}`;
     settingsUi.checkinBadge.textContent = checkin.auto ? "已开启" : "已关闭";
@@ -2565,6 +2970,7 @@
       auto: settingsUi.checkinAuto.value === "on",
       intervalMinutes: Number(settingsUi.checkinInterval.value),
       onClientLoad: settingsUi.checkinClientLoad.value === "on",
+      reminderDays: Number(settingsUi.checkinReminder.value),
     };
     settingsUi.checkinSave.disabled = true;
     try {
@@ -2612,9 +3018,30 @@
     try {
       const data = await api("/api/settings");
       applyAboutCheckinText(data.checkin);
+      applyCreditReminderDays(data.checkin);
     } catch {
       // The generic wording stays; it is not worth an error in the panel footer.
     }
+  }
+
+  /**
+   * Keeps the account list's reminder threshold in step with the saved setting.
+   *
+   * The list paints before the settings are read, so the first pass uses the
+   * default. Repainting from the accounts already on screen is what makes a saved
+   * threshold take effect without reopening the panel, and it costs no request:
+   * the threshold is a view decision, not account state.
+   */
+  function applyCreditReminderDays(checkin) {
+    const days = Number(checkin?.reminderDays);
+    if (!Number.isFinite(days) || days === creditReminderDays) return;
+    creditReminderDays = days;
+    repaintAccounts();
+  }
+
+  function repaintAccounts() {
+    if (!accountsView) return;
+    renderAccounts(accountsView.accounts, accountsView.currentAccountId, accountsView.currentAccountState);
   }
 
   /* -----------------------------------------------------------------------
@@ -2884,6 +3311,64 @@
   let appUpdateSnapshot = null;
   let appUpdateConfig = null;
   let appUpdateBusy = false;
+  /**
+   * The upgrade as the daemon last reported it.
+   *
+   * Deliberately kept apart from the box below, because the box can be dismissed
+   * and this cannot: the button's label has to keep reflecting what the daemon
+   * actually knows. Read from every push and every *freshly fetched* payload —
+   * never from a snapshot already in hand, since that is the difference between
+   * "the daemon says it is downloading" and "the daemon said so once, before the
+   * download died".
+   */
+  let appUpdateStage = "idle";
+  /**
+   * The upgrade in flight, as the progress box renders it.
+   *
+   * It lives here rather than inside the click handler on purpose: the About card
+   * is repainted from every `/api/update` payload, and a state kept only inside
+   * the handler is wiped by the next repaint — which is exactly how the button
+   * used to come back to life mid-download and turn a running upgrade into
+   * "安装失败" on the second click.
+   */
+  let appUpdateInstall = null;
+
+  /**
+   * The stages that mean the daemon still knows about a live upgrade.
+   *
+   * These are restored from `/api/update` when the panel is opened, so a panel
+   * that was closed and reopened during an upgrade still shows where it is —
+   * the handed-over stage included, because its whole job is to tell the user
+   * where to find a wizard that opened behind TRAE. `failed` and `cancelled` are
+   * deliberately not restored: both have already been said out loud once, and a
+   * box that came back on every open would read as a fresh failure.
+   */
+  const INSTALL_RESUMABLE_STAGES = new Set(["downloading", "verifying", "installing"]);
+
+  const INSTALL_MB = (bytes) =>
+    Number.isFinite(bytes) && bytes >= 0 ? (bytes / 1024 / 1024).toFixed(1) : null;
+
+  /**
+   * Bytes as "1.4 / 23.7 MB".
+   *
+   * The bytes are shown next to the percentage on purpose: a percentage alone
+   * cannot tell a slow download apart from one that has stopped, and "it is stuck
+   * at 6%" is the difference between waiting and reporting a broken proxy.
+   */
+  function installSizePair(received, total) {
+    const done = INSTALL_MB(received);
+    const all = INSTALL_MB(total);
+    return done !== null && all !== null ? `${done} / ${all} MB` : "";
+  }
+
+  /**
+   * An upgrade the daemon is still working on — the handed-over stage included,
+   * since a wizard that has been started is the most fixed thing here: it may be
+   * sitting behind TRAE, and it stops the service on its way in.
+   */
+  function isUpgradeRunning() {
+    return INSTALL_RESUMABLE_STAGES.has(appUpdateStage);
+  }
 
   /**
    * Renders the small Markdown subset used by release notes.
@@ -2955,14 +3440,97 @@
   }
 
   /**
+   * Paints the progress box, or takes it away when there is nothing to report.
+   *
+   * Every sentence here is about what has actually happened, in the order it
+   * happened: the download is the only phase with a percentage, verification is
+   * one that never has one, and the last one hands the user over to the installer
+   * window that has just opened in front of them.
+   */
+  function renderInstallMask() {
+    const state = appUpdateInstall;
+    if (!state) {
+      installMask.classList.remove("open");
+      return;
+    }
+    installMask.classList.add("open");
+
+    const version = state.version ? ` v${state.version}` : "";
+    const percent = Number.isFinite(state.percent) ? state.percent : null;
+    let title = `正在升级助手${version}`;
+    let status = "";
+    let showBar = false;
+    let showClose = false;
+    let showRetry = false;
+
+    if (state.stage === "downloading") {
+      const size = installSizePair(state.received, state.total);
+      status =
+        `正在下载安装包${percent === null ? "" : ` ${percent}%`}` +
+        `${size ? `（${size}）` : ""}…请不要关闭 TRAE。`;
+      showBar = true;
+    } else if (state.stage === "verifying") {
+      status = "下载完成，正在校验安装包的完整性…";
+      showBar = true;
+    } else if (state.stage === "installing") {
+      title = "安装程序已启动";
+      /**
+       * Said out loud because it is the one part of this flow TRAE cannot do for
+       * the user: Windows only lets the window that owns the foreground hand it
+       * to someone else, so a wizard started by the background service shows up
+       * on the taskbar and stays behind TRAE. A user who does not know to look
+       * there concludes the upgrade did nothing.
+       */
+      status =
+        "安装向导已经打开。如果它没有出现在 TRAE 前面，请到任务栏点一下" +
+        "「TRAE SOLO CN Enhancer 安装」窗口。安装期间助手服务会短暂停止，" +
+        "向导结束后回到面板点「重载界面」即可。";
+      showClose = true;
+    } else if (state.stage === "failed") {
+      title = "升级失败";
+      status = state.error || "安装未能完成。";
+      showClose = true;
+      showRetry = true;
+    } else {
+      installMask.classList.remove("open");
+      return;
+    }
+
+    installUi.title.textContent = title;
+    installUi.status.textContent = status;
+    installUi.bar.hidden = !showBar;
+    installUi.fill.style.width = `${percent ?? 0}%`;
+    installUi.close.hidden = !showClose;
+    installUi.retry.hidden = !showRetry;
+  }
+
+  /**
    * Paints the About card from one `/api/update` payload.
    *
    * A failed check is reported as a failed check, never as "已是最新": the two
    * look identical to the user otherwise, and only one of them is true.
+   *
+   * `fresh` says the payload came off the wire just now, which is the only case
+   * where a live stage may be picked up. A repaint from the snapshot already in
+   * hand must not: the snapshot is whatever `/api/update` happened to say at some
+   * earlier moment, so restoring from it would resurrect a download that has since
+   * died and park the box on its last percentage forever.
    */
-  function renderAppUpdate(update) {
+  function renderAppUpdate(update, { fresh = false } = {}) {
     if (!update) return;
     appUpdateSnapshot = update;
+    /**
+     * A panel opened after the upgrade started learns about it here, which is the
+     * whole reason the daemon publishes the state on `/api/update` too: the pushes
+     * only reach a panel that was already listening.
+     */
+    if (fresh) {
+      appUpdateStage = update.install?.stage ?? "idle";
+      if (!appUpdateInstall && INSTALL_RESUMABLE_STAGES.has(update.install?.stage)) {
+        appUpdateInstall = { ...update.install };
+        renderInstallMask();
+      }
+    }
     const hasUpdate = Boolean(update.hasUpdate);
     const latest = update.latest;
     updateTabDot.hidden = !hasUpdate;
@@ -2988,6 +3556,15 @@
     else lines.push("还没有检查过更新。点「检查更新」可以立刻查一次。");
     if (update.error) lines.push(`上次检查失败：${update.error}`);
     else if (update.checkedAt) lines.push(`上次检查：${formatExpiry(update.checkedAt)}`);
+    // A release the helper refuses to install is said out loud, with the reason:
+    // a disabled button on its own would look like a bug in the panel.
+    if (hasUpdate && !latest?.installer) {
+      lines.push(
+        latest?.installerError
+          ? `这个版本无法自动安装：${latest.installerError}。`
+          : "这个版本无法自动安装。",
+      );
+    }
     updateUi.state.textContent = lines.join(" ");
 
     const notes = hasUpdate ? String(latest?.notes || "").trim() : "";
@@ -2998,9 +3575,20 @@
       updateUi.notes.textContent = "";
       updateUi.notes.hidden = true;
     }
-    // The upgrade steps only make sense next to a version to upgrade to.
+    // The upgrade steps only make sense next to a version to upgrade to, and the
+    // button only next to an installer the helper is willing to run.
     updateUi.steps.hidden = !hasUpdate;
     updateUi.open.hidden = !hasUpdate;
+    // A running upgrade keeps the button out of reach, so a second click cannot
+    // turn "already installing" into a failure message. The label comes from the
+    // daemon's own stage, not from the box: a failure the user dismissed is still
+    // the last known outcome, so the next click is a retry.
+    updateUi.open.disabled = (hasUpdate && !latest?.installer) || isUpgradeRunning();
+    updateUi.open.textContent = isUpgradeRunning()
+      ? "升级中…"
+      : appUpdateStage === "failed"
+        ? "重试"
+        : "立即升级";
     updateUi.reload.hidden = !hasUpdate;
     updateUi.check.textContent = hasUpdate ? "重新检查" : "检查更新";
     if (appUpdateConfig) renderAppUpdateConfig(appUpdateConfig, update);
@@ -3008,7 +3596,7 @@
 
   async function loadAppUpdate() {
     try {
-      renderAppUpdate(await api("/api/update"));
+      renderAppUpdate(await api("/api/update"), { fresh: true });
     } catch {
       // The daemon is unreachable; the card keeps its previous state and the
       // footer already reports the outage.
@@ -3025,7 +3613,7 @@
         method: "POST",
         body: JSON.stringify({ force: true }),
       });
-      renderAppUpdate(data);
+      renderAppUpdate(data, { fresh: true });
       if (!silent) {
         if (data.hasUpdate) showToast(`发现新版本 v${data.latest.version}`);
         else if (data.error) showToast(`检查更新失败：${data.error}`, true);
@@ -3042,17 +3630,128 @@
     }
   }
 
-  async function openUpdatePage() {
-    updateUi.open.disabled = true;
+  /**
+   * Downloads, verifies and installs the newer release, because the user asked.
+   *
+   * The request stays open for the whole download, so this only starts the state
+   * machine: the box is painted from the daemon's progress pushes, and this
+   * function's job is to open it, and to translate the request's own outcome into
+   * the same shape. Two things are deliberately not failures — a 409 saying an
+   * upgrade is already running (that is progress, and the pushes will drive it),
+   * and a dropped connection, which is the installer stopping the daemon on its
+   * way in and looks identical to a failure from here.
+   */
+  async function installAppUpdate() {
+    const latest = appUpdateSnapshot?.latest;
+    if (!latest?.installer) {
+      showToast(latest?.installerError || "还没有可安装的新版本，请先检查更新", true);
+      return;
+    }
+    appUpdateStage = "downloading";
+    appUpdateInstall = {
+      stage: "downloading",
+      version: latest.version,
+      percent: 0,
+      received: 0,
+      total: latest.installer.size,
+      error: null,
+    };
+    renderInstallMask();
+    updateUi.check.disabled = true;
+    renderAppUpdate(appUpdateSnapshot);
     try {
-      await api("/api/update/open", { method: "POST", body: "{}" });
-      showToast("已在浏览器打开下载页；装好新版后回到 TRAE 点「重载界面」");
+      await api("/api/update/install", { method: "POST", body: "{}" });
+      /**
+       * The daemon pushes this stage as well, so this is normally a no-op. It is
+       * here so a push that never arrived cannot leave the box frozen at the last
+       * download percentage while the installer window is already open: a reply
+       * this endpoint only sends after the checks passed is proof enough.
+       */
+      if (isUpgradeRunning()) {
+        appUpdateStage = "installing";
+        appUpdateInstall = { ...appUpdateInstall, stage: "installing", percent: 100 };
+        renderInstallMask();
+      }
+      showToast("安装程序已启动");
     } catch (error) {
-      showToast(error.message || String(error), true);
+      if (error?.code === "install-in-flight") {
+        /**
+         * The daemon is already upgrading, so the optimistic "正在下载 0%" set a
+         * moment ago is a lie and is dropped before anything is painted: leaving
+         * it up is what made a refused second click look like a second download
+         * that then hung. The daemon is the only side that knows whether the
+         * download is still running or the wizard is already open, so its own
+         * stage is read back — `renderAppUpdate` restores it from there.
+         */
+        appUpdateInstall = null;
+        renderInstallMask();
+        await loadAppUpdate();
+        showToast("升级已经开始了");
+        return;
+      }
+      if (error instanceof TypeError) {
+        appUpdateStage = "installing";
+        appUpdateInstall = { ...appUpdateInstall, stage: "installing", percent: 100 };
+        renderInstallMask();
+        showToast("助手正在重启，稍等片刻");
+        return;
+      }
+      const message = error?.message || String(error);
+      appUpdateStage = "failed";
+      appUpdateInstall = { ...appUpdateInstall, stage: "failed", error: message, percent: null };
+      renderInstallMask();
+      showToast(`升级失败：${message}`, true);
     } finally {
-      updateUi.open.disabled = false;
+      updateUi.check.disabled = false;
+      renderAppUpdate(appUpdateSnapshot);
     }
   }
+
+  /**
+   * Applies one progress push from the daemon.
+   *
+   * A push is always the newest thing known about the upgrade, so it overwrites
+   * whatever the panel holds: the daemon only sends one when something actually
+   * changed, and that change is newer than anything this side inferred.
+   */
+  function handleUpdateProgress(detail) {
+    if (!detail || typeof detail !== "object" || detail.stage === "idle") return;
+    appUpdateStage = detail.stage;
+    /**
+     * The daemon is still alive and saw the wizard exit, which means nothing was
+     * installed — it was closed, or it never started. The box has to go away and
+     * the button has to come back, or the panel keeps claiming an installer is
+     * running that no longer exists.
+     */
+    if (detail.stage === "cancelled") {
+      appUpdateInstall = null;
+      renderInstallMask();
+      renderAppUpdate(appUpdateSnapshot);
+      showToast("安装向导已关闭，本次升级没有完成");
+      return;
+    }
+    appUpdateInstall = { ...detail };
+    renderInstallMask();
+    renderAppUpdate(appUpdateSnapshot);
+  }
+
+  function handleUpdateProgressEvent(event) {
+    handleUpdateProgress(event?.detail);
+  }
+  window.addEventListener(UPDATE_PROGRESS_EVENT, handleUpdateProgressEvent);
+
+  // Dismisses the box and nothing else: `appUpdateStage` keeps what the daemon
+  // last said, so the button below still reads "重试" and the repaint from the
+  // snapshot already in hand cannot bring the box back.
+  installUi.close.addEventListener("click", () => {
+    appUpdateInstall = null;
+    renderInstallMask();
+    renderAppUpdate(appUpdateSnapshot);
+  });
+
+  installUi.retry.addEventListener("click", () => {
+    installAppUpdate().catch(() => {});
+  });
 
   /**
    * Re-injects the panel from the running daemon.
@@ -3213,6 +3912,20 @@
     }, 150);
   }
   window.addEventListener(ACCOUNTS_UPDATED_EVENT, handleAccountsUpdated);
+
+  /**
+   * The launcher's way of speaking to a user whose window it could not bring to
+   * the front. One-shot with no retry, so a panel that happens to be closed is
+   * opened first — otherwise the toast would render inside a hidden panel and
+   * nothing would be seen at all.
+   */
+  function handleNotice(event) {
+    const message = event?.detail?.message;
+    if (!message) return;
+    if (!panel.classList.contains("open")) openPanel();
+    showToast(message, true);
+  }
+  window.addEventListener(NOTICE_EVENT, handleNotice);
 
   function failureDetails(result) {
     const failures = Array.isArray(result?.results)
@@ -3913,7 +4626,7 @@
     checkAppUpdate().catch(() => {});
   });
   updateUi.open.addEventListener("click", () => {
-    openUpdatePage().catch(() => {});
+    installAppUpdate().catch(() => {});
   });
   updateUi.reload.addEventListener("click", () => {
     reloadPanel().catch(() => {});
@@ -3930,6 +4643,12 @@
     });
   }
   list.addEventListener("click", (event) => {
+    const creditsButton = event.target.closest(".te-acc-credits");
+    if (creditsButton?.dataset.accountId) {
+      const account = accountsById.get(creditsButton.dataset.accountId);
+      if (account) toggleCreditPopover(creditsButton, account);
+      return;
+    }
     const deleteButton = event.target.closest(".te-acc-delete");
     if (deleteButton?.dataset.accountId) {
       const account = accountsById.get(deleteButton.dataset.accountId);
@@ -3945,6 +4664,32 @@
     if (!button?.dataset.accountId) return;
     switchAccount(button, button.dataset.accountId).catch(() => {});
   });
+  // Capture phase, so a click anywhere else closes the popover before whatever it
+  // was aimed at acts on it. The icon's own mousedown is ignored, otherwise the
+  // popover would close and reopen on the same click.
+  function handleCreditPopoverDismiss(event) {
+    if (!creditPopoverAnchor) return;
+    if (creditPopover.contains(event.target)) return;
+    if (event.target.closest?.(".te-acc-credits")) return;
+    closeCreditPopover();
+  }
+  function handleCreditPopoverEscape(event) {
+    if (event.key === "Escape") closeCreditPopover();
+  }
+  document.addEventListener("mousedown", handleCreditPopoverDismiss, true);
+  document.addEventListener("keydown", handleCreditPopoverEscape);
+  // A fixed-position popover does not follow its anchor, so a scroll of the list
+  // behind it would leave it pointing at the wrong row. Closing is the honest
+  // answer there — but the popover scrolls its own content as soon as an account
+  // has more segments than fit, and a capture-phase listener on the window sees
+  // that scroll too. Acting on it closed the popover the instant its scrollbar
+  // moved, which is what made the scrollbar impossible to drag.
+  function handleCreditPopoverScroll(event) {
+    if (creditPopover.contains(event.target)) return;
+    closeCreditPopover();
+  }
+  window.addEventListener("scroll", handleCreditPopoverScroll, true);
+  window.addEventListener("resize", closeCreditPopover);
   deleteMask.querySelector(".te-delete-cancel").addEventListener("click", closeDeleteDialog);
   deleteMask.querySelector(".te-delete-submit").addEventListener("click", () => {
     confirmDeleteAccount().catch(() => {});
@@ -4032,7 +4777,13 @@
     clearTimeout(toastTimer);
     clearTimeout(accountsUpdatedTimer);
     window.removeEventListener(ACCOUNTS_UPDATED_EVENT, handleAccountsUpdated);
+    window.removeEventListener(NOTICE_EVENT, handleNotice);
     window.removeEventListener(UPDATE_AVAILABLE_EVENT, handleUpdateAvailable);
+    window.removeEventListener(UPDATE_PROGRESS_EVENT, handleUpdateProgressEvent);
+    document.removeEventListener("mousedown", handleCreditPopoverDismiss, true);
+    document.removeEventListener("keydown", handleCreditPopoverEscape);
+    window.removeEventListener("scroll", handleCreditPopoverScroll, true);
+    window.removeEventListener("resize", closeCreditPopover);
     stopOAuthPolling();
     stopFakeLogoutPolling();
     root.remove();

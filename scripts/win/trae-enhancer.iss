@@ -482,12 +482,36 @@ begin
   );
 end;
 
+{ PrepareToInstall 已经停掉了旧服务，所以任何覆盖安装都必须由安装程序自己把它补
+  回来，不能指望用户顺手勾上结束页的「启动」：静默升级时 [Run] 整段被跳过，交互
+  升级时那个勾选框也可能被取消。少这一次 `daemon`，升级完就只剩一个死掉的后台，
+  被注入的面板也不会再回来。
+
+  只在「覆盖安装」补：全新安装之前没有服务在跑，多此一举。
+  重复调用是安全的 —— `daemon` 子命令先探健康检查，发现守护进程已在运行就只补
+  监督进程，不会开第二个。
+
+  这里启动的是服务 CLI 的 `daemon` 子命令，它自己再以分离方式拉起守护进程与监督
+  进程，所以安装程序退出不会带走它们。 }
+procedure RestoreServiceAfterUpgrade();
+var
+  ResultCode: Integer;
+  ExePath: String;
+begin
+  if not AlreadyInstalled then Exit;
+  ExePath := ExpandConstant('{app}\{#ProductExe}');
+  if not FileExists(ExePath) then Exit;
+  if not Exec(ExePath, 'daemon', ExpandConstant('{app}'), SW_HIDE, ewNoWait, ResultCode) then
+    Log('unable to restart the background service after an upgrade');
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
     PersistTraePath();
     EnableAutostart();
+    RestoreServiceAfterUpgrade();
   end;
 end;
 
